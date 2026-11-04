@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: gully-cricket-live
+    runtime: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: cricket-data
+      mountPath: /app/data
+      sizeGB: 1

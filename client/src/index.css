@@ -1,0 +1,82 @@
+@import '@fontsource/barlow/400.css';
+@import '@fontsource/barlow/500.css';
+@import '@fontsource/barlow/600.css';
+@import '@fontsource/barlow-condensed/500.css';
+@import '@fontsource/barlow-condensed/700.css';
+@import '@fontsource/barlow-condensed/800.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: dark; -webkit-tap-highlight-color: transparent; }
+body {
+  min-height: 100dvh;
+  /* Floodlit night ground: a lit oval of outfield fading into the dark stands */
+  background:
+    radial-gradient(120% 60% at 50% -10%, rgba(255, 210, 63, 0.10), transparent 60%),
+    radial-gradient(90% 70% at 50% 35%, #13402B 0%, #0A1F17 62%, #061510 100%) fixed;
+}
+/* Mowing stripes on the outfield, very faint */
+.mown {
+  background-image: repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0 38px, transparent 38px 76px);
+}
+:focus-visible { outline: 3px solid #FFD23F; outline-offset: 2px; border-radius: 6px; }
+
+@layer components {
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-3 font-display text-lg font-bold tracking-wide transition active:scale-[0.97] disabled:opacity-40 disabled:active:scale-100; }
+  .btn-go { @apply btn bg-turf text-pitch-900 hover:bg-[#45e58c]; }
+  .btn-flood { @apply btn bg-flood text-pitch-900 hover:bg-[#ffdc66]; }
+  .btn-ghost { @apply btn bg-pitch-700/70 text-chalk ring-1 ring-pitch-500 hover:bg-pitch-600; }
+  .btn-danger { @apply btn bg-leather text-chalk hover:bg-[#ec4c51]; }
+  .field { @apply w-full rounded-lg bg-pitch-900/80 px-3 py-3 text-chalk ring-1 ring-pitch-500 placeholder:text-chalk-faint focus:outline-none focus:ring-2 focus:ring-flood; }
+  .panel { @apply rounded-2xl bg-pitch-800/85 ring-1 ring-pitch-600 backdrop-blur; }
+  .label { @apply mb-1 block text-sm font-medium text-chalk-dim; }
+}
+
+/* ---------- The leather ball ---------- */
+.ball {
+  position: relative; width: 100%; aspect-ratio: 1; border-radius: 9999px; perspective: 400px;
+}
+.ball-inner {
+  position: absolute; inset: 0; transform-style: preserve-3d; transition: transform 0.55s cubic-bezier(.3,1.4,.5,1);
+}
+.ball.flipped .ball-inner { transform: rotateY(180deg); }
+.ball-face, .ball-back {
+  position: absolute; inset: 0; border-radius: 9999px; backface-visibility: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.ball-face {
+  background: radial-gradient(circle at 32% 28%, #ff8a8d 0%, #E0393E 30%, #9E1E24 78%, #6d1218 100%);
+  box-shadow: inset -4px -6px 10px rgba(0,0,0,0.35), 0 4px 10px rgba(0,0,0,0.4);
+}
+.ball-face::before, .ball-face::after {
+  content: ''; position: absolute; top: 8%; bottom: 8%; width: 46%;
+  border: 2px dashed rgba(242,245,236,0.75); border-top: 0; border-bottom: 0;
+}
+.ball-face::before { left: 4%; border-left: 0; border-radius: 0 60% 60% 0 / 0 50% 50% 0; }
+.ball-face::after { right: 4%; border-right: 0; border-radius: 60% 0 0 60% / 50% 0 0 50%; }
+.ball-back { transform: rotateY(180deg); background: #F2F5EC; color: #0A1F17; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
+.ball-back.is-wicket { background: #E0393E; color: #F2F5EC; }
+.ball-back.is-boundary { background: #FFD23F; }
+.ball.empty .ball-face { background: transparent; box-shadow: inset 0 0 0 2px rgba(169,189,176,0.35); }
+.ball.empty .ball-face::before, .ball.empty .ball-face::after { border-color: rgba(169,189,176,0.18); }
+.ball.dead { opacity: 0.25; }
+
+/* ---------- Big moment overlay ---------- */
+@keyframes sweep { 0% { transform: translateX(-120%) skewX(-12deg); opacity: 0 } 18% { transform: translateX(0) skewX(-12deg); opacity: 1 } 78% { transform: translateX(0) skewX(-12deg); opacity: 1 } 100% { transform: translateX(120%) skewX(-12deg); opacity: 0 } }
+@keyframes stumps { 0% { transform: rotate(0) translateY(0) } 100% { transform: var(--fly) } }
+@keyframes rise { 0% { transform: translateY(0) scale(0.6); opacity: 0 } 15% { opacity: 1 } 100% { transform: translateY(-60vh) scale(1.3); opacity: 0 } }
+@keyframes pop { 0% { transform: scale(0.85); opacity: 0 } 100% { transform: scale(1); opacity: 1 } }
+@keyframes pulseRing { 0%,100% { box-shadow: 0 0 0 0 rgba(47,214,123,0.55) } 50% { box-shadow: 0 0 0 10px rgba(47,214,123,0) } }
+.fx-word { animation: sweep 1.7s cubic-bezier(.2,.8,.2,1) forwards; }
+.stump { transform-origin: bottom center; animation: stumps 0.9s cubic-bezier(.2,.7,.3,1) 0.15s forwards; }
+.cheer { animation: rise 2.2s ease-out forwards; }
+.pop { animation: pop 0.25s ease-out; }
+.your-turn { animation: pulseRing 1.6s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fx-word, .stump, .cheer, .your-turn { animation: none !important; }
+  .ball-inner { transition: none; }
+}
+.no-scrollbar::-webkit-scrollbar { display: none; }

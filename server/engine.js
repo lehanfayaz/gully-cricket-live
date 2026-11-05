@@ -438,12 +438,16 @@ const commit = (digits) => {
   const salt = crypto.randomBytes(8).toString('hex');
   return { salt, hash: crypto.createHash('sha256').update(`${digits}:${salt}`).digest('hex') };
 };
-// The bowler's numbers already bowled in the over in progress (for the repetition limit).
+// The bowler's numbers that count towards the repetition rule right now: those bowled in the
+// over in progress since its start or since the last wicket in it, whichever is later.
+// A wicket resets this count; it does not reset the over's legal-ball count.
 function bowledThisOver(inn) {
   const t = totals(inn.id);
   if (t.balls % 6 === 0) return [];
-  const start = t.balls - (t.balls % 6) + 1;
-  return all('SELECT bowl_num FROM balls WHERE innings_id = ? AND voided = 0 AND ball_no >= ? ORDER BY ball_no', inn.id, start).map((r) => r.bowl_num);
+  const overStart = t.balls - (t.balls % 6) + 1;
+  const lastWicket = get('SELECT MAX(ball_no) AS n FROM balls WHERE innings_id = ? AND voided = 0 AND is_wicket = 1 AND ball_no >= ?', inn.id, overStart)?.n;
+  const from = lastWicket ? lastWicket + 1 : overStart;
+  return all('SELECT bowl_num FROM balls WHERE innings_id = ? AND voided = 0 AND ball_no >= ? ORDER BY ball_no', inn.id, from).map((r) => r.bowl_num);
 }
 
 export function submitOver(userId, matchId, seq, ctx) {

@@ -53,7 +53,7 @@ export function SubmitOver({ state, role, cur, priv }) {
       )}
       {limit && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" aria-label="Times each number has been used this over">
-          <span className="text-chalk-faint">Used this over (one number up to 3, the rest up to 2):</span>
+          <span className="text-chalk-faint">Used this over{cur.ballInOver > 1 ? ' since the start or last wicket' : ''} (one number up to 3, the rest up to 2):</span>
           {digits.map((n) => <span key={n} className={`rounded px-1.5 py-0.5 tabular-nums ${blocked(n, seq) ? 'bg-leather text-chalk' : 'bg-pitch-700 text-chalk-dim'}`}>{n}: {used(n, seq)}</span>)}
         </div>
       )}

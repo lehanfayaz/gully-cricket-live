@@ -107,7 +107,7 @@ assert.equal(st.test.requirements.length, 0);
 assert.equal(st.innings[0].card.bowling.find((b) => b.wickets !== undefined).wickets, 0, 'rule dismissals are not credited to the bowler');
 assert.notEqual(st.current.strikerId, id(firstBat));
 assert.equal(st.current.cap, 4, 'new batter finishes the over: 4 balls');
-await bowler().bad('over:submit', { sequence: [1, 1, 2, 3] }, /1 would be used 4 times \(2 already bowled/); // 1,1 already bowled this over
+assert.deepEqual(fan.last().current.bowledThisOver, [], 'the dot-rule wicket also resets the bowler count');
 await bowler().ok('over:submit', { sequence: [2, 2, 3, 3] });
 await batter().ok('over:submit', { sequence: [1, 1, 1, 1] });
 await settle();
@@ -166,10 +166,13 @@ assert.equal(st.test.requirements[0].status, 'pending');
 await bowler().bad('over:submit', { sequence: [4] }, /umpire to rule/);
 await ali.bad('test', T({ type: 'rule', decision: 'waive' }), /umpire/);
 await ump.ok('test', T({ type: 'rule', decision: 'waive' }));
-for (const d of [1, 1, 2, 2]) { await bowler().ok('over:submit', { sequence: [d] }); await batter().ok('over:submit', { sequence: [6] }); }
+// Ball by ball: 1,1,1 then a wicket resets the count, so 1 can be bowled again.
+for (const [d, b] of [[1, 6], [1, 6], [1, 6], [2, 2]]) { await bowler().ok('over:submit', { sequence: [d] }); await batter().ok('over:submit', { sequence: [b] }); }
+await settle();
+assert.equal(fan.last().innings[0].wickets, 1); assert.deepEqual(fan.last().current.bowledThisOver, []);
 await settle();
 st = fan.last();
-assert.equal(st.innings[0].runs, 24);
+assert.equal(st.innings[0].runs, 18);
 assert.equal(st.status, 'completed'); assert.equal(st.result.draw, true, 'scheduled time over: draw');
 
 // ===== 3. Follow-on and an innings victory =====

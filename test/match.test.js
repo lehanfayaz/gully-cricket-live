@@ -111,7 +111,9 @@ assert.equal(st.current.over.balls.length, 5); assert.equal(st.current.over.fini
 const batCapt = byId[st.captains[batTeam]];
 await batCapt.bad('captain', { action: { type: 'next_batter', team: batTeam, userId: id(firstBatter) } }, /is out/);
 await batter().bad('over:submit', { sequence: [1, 2, 3, 4, 5, 6] }, /exactly 1|one number/);
-await b1.ok('over:submit', { sequence: [1] });
+// The wicket reset the bowler's repetition count (3 was used three times before it), but not the over.
+assert.deepEqual(st.current.bowledThisOver, []);
+await b1.ok('over:submit', { sequence: [3] });
 await batter().ok('over:submit', { sequence: [2] });
 await settle();
 st = fan.last();
@@ -190,6 +192,24 @@ for (let k = 0; k < 2; k++) { await bowler().ok('over:submit', { sequence: [1] }
 await settle();
 st = fan.last();
 assert.equal(st.status, 'completed'); assert.match(st.result.text, /won by 1 wicket/);
+// ===== The brief's example: 444663 with a wicket on ball 2, then 4443 for the last four balls =====
+const m4 = (await api('/api/matches', { config: { mode: 'auto', play: 'over', overs: 1, wickets: 2 } }, host.token)).id;
+for (const c of [host, ali, chen, bilal, fan]) await c.open(m4);
+await ali.ok('team:join', { team: 'A' }); await chen.ok('team:join', { team: 'A' }); await bilal.ok('team:join', { team: 'B' });
+await ali.ok('lineup:confirm', { team: 'A' }); await bilal.ok('lineup:confirm', { team: 'B' });
+await doToss(fan, byId, 'bat');
+await bowler().ok('over:submit', { sequence: [4, 4, 4, 6, 6, 3] });
+await batter().ok('over:submit', { sequence: [1, 4, 1, 1, 1, 1] });
+await settle();
+st = fan.last();
+assert.equal(st.innings[0].balls, 2); assert.equal(st.innings[0].wickets, 1);
+assert.equal(st.current.cap, 4, 'four legal balls left in the over');
+await bowler().ok('over:submit', { sequence: [4, 4, 4, 3] }); // valid: the count reset at the wicket
+await batter().bad('over:submit', { sequence: [1, 1, 1, 1, 1, 1] }, /exactly 4/);
+await batter().ok('over:submit', { sequence: [1, 1, 1, 1] });
+await settle();
+assert.equal(fan.last().innings[0].balls, 6);
+
 const profile = await api(`/api/users/${id(ali)}`);
 assert.ok(profile.record.matches >= 2, 'stats still saved');
 

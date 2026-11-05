@@ -2,19 +2,26 @@
 
 A real-time multiplayer number-cricket game that runs in the browser. One person creates a match and umpires, friends join from a link on their own phones, and everything happens in the app: sealing the bowler's numbers, batting, chat, notifications, scoring, and saved stats. No WhatsApp needed.
 
-## How an over works
+## How a match runs
 
-1. The bowler and the batter each lock in six numbers (1–6), in any order. Neither can see the other's.
-2. The moment both are locked in, the server compares them ball by ball and reveals the whole over.
-3. Same number on a ball: the batter is out and the rest of the over is ignored.
-4. Different number: the batter scores what they picked.
-5. The next over (or the new batter after a wicket) starts with fresh sequences from both.
+1. The creator picks the format, the **play style** (complete over or ball by ball, fixed for the match) and whether there's an **umpire**.
+2. Friends join from the link and pick a team. The first player in each team is captain.
+3. Each captain arranges the batting order (the top player opens) and the bowling order, then **confirms the lineup**. Changing a confirmed lineup before the toss resets its confirmation.
+4. Once both are confirmed, the system picks which captain **calls the toss**. The coin is flipped on the server, and the winning captain chooses **bat or bowl**.
+5. No umpire: the match starts straight away. With an umpire: the umpire starts it.
 
-## Match modes and captains
+## How the numbers work
 
-- **No umpire**: fully automatic. Scoring, wickets, innings changes, super overs and the result need nobody. The creator is the "host": they can moderate chat and end a match early, nothing more.
-- **With umpire**: the creator umpires. They start each innings, can pause, void the last over, adjust runs, end early, and privately see the bowler's six (never the batter's).
-- **Captains**: each team has one, by default the first player to join. Only the captain can change their team's batting order (openers at the top), bowling order, next bowler, next batter and squad. This is checked on the server. Every lineup change is written to the match history.
+- **Complete over:** bowler and batter each lock in one number per ball left in the over (six at the start of an over, fewer after a wicket). Nothing is shown until both are in; then the server reveals them together.
+- **Ball by ball:** both pick one number per ball, revealed as soon as both are in.
+- Same number: out, and the rest of that submission is ignored. Different: the batter scores what they picked.
+- Overs are always six legal balls. After a wicket, the next batter faces the rest of the same over against the same bowler, entering only as many numbers as there are balls left.
+
+## Umpire, host and captains
+
+- **No umpire**: fully automatic. The creator is the "host": they can moderate chat and end a match early, nothing more.
+- **With umpire**: the creator umpires. They start the match and each innings, can pause, void the last reveal, adjust runs and end early. They privately see the bowler's numbers (never the batter's).
+- **Captains**: only the captain can change their team's batting order, bowling order, next bowler (between overs), next batter (before they start) and, until the toss, the squad. This is checked on the server. Every change is written to the match history.
 
 ## Run it locally
 
@@ -72,7 +79,7 @@ test/match.test.js   End-to-end test with four socket clients
 ## Rules decisions you can change
 
 - **Batting order cycles.** If a team has fewer players than wickets (for example 1 v 1 with 3 wickets), the next batter is whoever in the order has been out the fewest times, so the same player can bat again.
-- **Overs are counted in balls.** With "a wicket ends the over" on, the scoreboard counts the balls actually played. The innings ends after overs × 6 balls, and the last over is cut short to fit (players still enter six numbers; only the first ones count).
+- **Out batters come back last.** A captain can't send an out player back in while a teammate hasn't batted yet.
 - **Super over.** It's 6 balls with 2 wickets. The team that batted second bats first. A second tie is recorded as a tie.
 - **Ranking points** are runs + 20 per wicket taken + 25 per win.
 

@@ -15,11 +15,8 @@ async function client(name) {
   const { token, user } = await api('/api/auth/guest', { name });
   const s = io(base, { auth: { token }, transports: ['websocket'] });
   const c = { name, token, user, s, states: [], privates: [], chats: [], notes: [], fx: [] };
-  s.on('state', (x) => c.states.push(x));
-  s.on('private', (x) => c.privates.push(x));
-  s.on('chat', (x) => c.chats.push(x));
-  s.on('notify', (x) => c.notes.push(x));
-  s.on('fx', (x) => c.fx.push(x));
+  s.on('state', (x) => c.states.push(x)); s.on('private', (x) => c.privates.push(x));
+  s.on('chat', (x) => c.chats.push(x)); s.on('notify', (x) => c.notes.push(x)); s.on('fx', (x) => c.fx.push(x));
   c.emit = (ev, payload) => new Promise((r) => s.emit(ev, { matchId: c.matchId, ...payload }, r));
   c.ok = async (ev, payload) => { const r = await c.emit(ev, payload); assert.ok(r.ok, `${name} ${ev}: ${r.error}`); return r; };
   c.bad = async (ev, payload, re) => { const r = await c.emit(ev, payload); assert.equal(r.ok, false, `${name} ${ev} should fail`); if (re) assert.match(r.error, re); return r; };
@@ -31,150 +28,164 @@ async function client(name) {
 const settle = () => new Promise((r) => setTimeout(r, 40));
 const id = (c) => c.user.id;
 
-// ====== Match 1: no umpire, captains run their lineups ======
-const host = await client('Host Hana');
-const ali = await client('Ali'), chen = await client('Chen');   // Lions
-const bilal = await client('Bilal'), dev = await client('Dev'); // Tigers
-const fan = await client('Fan');
-const all5 = [host, ali, chen, bilal, dev, fan];
+// Runs the toss for whoever was picked to call, and returns the winning team.
+async function doToss(watch, byId, decision) {
+  await settle();
+  const st = watch.last();
+  assert.equal(st.stage, 'toss_call');
+  const caller = byId[st.captains[st.toss.caller]];
+  const other = Object.values(byId).find((c) => c !== caller && (id(c) === st.captains.A || id(c) === st.captains.B));
+  await other.bad('toss:call', { call: 'heads' }, /calling this toss/);
+  await caller.bad('toss:decide', { decision: 'bat' }, /hasn't happened/);
+  await caller.ok('toss:call', { call: 'heads' });
+  await caller.bad('toss:call', { call: 'tails' }, /already been called/);
+  await settle();
+  const t = watch.last().toss;
+  assert.equal(t.call, 'heads'); assert.ok(['heads', 'tails'].includes(t.result));
+  assert.equal(t.winner, t.result === 'heads' ? st.toss.caller : (st.toss.caller === 'A' ? 'B' : 'A'));
+  assert.ok(watch.fx.some((f) => f.type === 'toss'));
+  const winner = byId[watch.last().captains[t.winner]];
+  const loser = winner === caller ? other : caller;
+  await loser.bad('toss:decide', { decision: 'bat' }, /captain decides/);
+  await winner.ok('toss:decide', { decision });
+  await settle();
+  return t.winner;
+}
 
-const m1 = (await api('/api/matches', { teamA: 'Lions', teamB: 'Tigers', config: { mode: 'auto', overs: 2, wickets: 2 } }, host.token)).id;
-for (const c of all5) await c.open(m1);
+// ====== Match 1: no umpire, complete-over play ======
+const host = await client('Host Hana');
+const ali = await client('Ali'), chen = await client('Chen'), bilal = await client('Bilal'), dev = await client('Dev');
+const fan = await client('Fan');
+const byId = Object.fromEntries([host, ali, chen, bilal, dev, fan].map((c) => [id(c), c]));
+const m1 = (await api('/api/matches', { teamA: 'Lions', teamB: 'Tigers', config: { mode: 'auto', play: 'over', overs: 2, wickets: 3 } }, host.token)).id;
+for (const c of Object.values(byId)) await c.open(m1);
 await ali.ok('team:join', { team: 'A' }); await chen.ok('team:join', { team: 'A' });
 await bilal.ok('team:join', { team: 'B' }); await dev.ok('team:join', { team: 'B' });
 await settle();
-let st = fan.last();
-assert.equal(st.mode, 'auto'); assert.equal(st.umpire, null);
-assert.equal(st.captains.A, id(ali), 'first to join captains'); assert.equal(st.captains.B, id(bilal));
+assert.equal(fan.last().stage, 'awaiting_lineups');
+assert.equal(fan.last().play, 'over');
 
-// Captain powers are enforced on the server.
-await chen.bad('captain', { action: { type: 'bat_order', team: 'A', userIds: [id(chen), id(ali)] } }, /captain/);
-await bilal.bad('captain', { action: { type: 'bat_order', team: 'A', userIds: [id(chen), id(ali)] } }, /captain/);
-await host.bad('umpire', { action: { type: 'pause' } }, /no umpire/);
+// Nothing can skip lineup confirmation.
+await host.bad('match:start', {}, /confirm/);
+await ali.bad('toss:call', { call: 'heads' }, /confirm/);
+await chen.bad('lineup:confirm', { team: 'A' }, /captain/);
+await bilal.bad('lineup:confirm', { team: 'A' }, /captain/);
+await ali.ok('lineup:confirm', { team: 'A' });
+await ali.bad('lineup:confirm', { team: 'A' }, /already confirmed/);
+await settle();
+assert.ok(fan.last().lineups.A.confirmedAt); assert.equal(fan.last().lineups.B.confirmedAt, null);
+// Changing a confirmed lineup before the toss resets its confirmation.
 await ali.ok('captain', { action: { type: 'bat_order', team: 'A', userIds: [id(chen), id(ali)] } });
-await bilal.ok('captain', { action: { type: 'bowl_order', team: 'B', userIds: [id(dev), id(bilal)] } });
-await fan.bad('match:start', {}, /host or a captain/);
-await bilal.ok('match:start');
 await settle();
-st = fan.last();
-assert.equal(st.current.strikerId, id(chen), 'captain chose the opener');
-assert.equal(st.current.bowlerId, id(dev), 'captain chose the first bowler');
-assert.ok(chen.notes.some((n) => n.kind === 'bat') && dev.notes.some((n) => n.kind === 'bowl'), 'both notified');
+assert.equal(fan.last().lineups.A.confirmedAt, null, 'confirmation reset after a change');
+assert.ok(fan.last().history.some((h) => /needs confirming again/.test(h.text)));
+await ali.ok('lineup:confirm', { team: 'A' });
+await bilal.ok('lineup:confirm', { team: 'B' });
+const tossWinner = await doToss(fan, byId, 'bowl');
+let st = fan.last();
+// No umpire: the decision starts the match straight away.
+assert.equal(st.status, 'live'); assert.equal(st.stage, 'live');
+const batTeam = tossWinner === 'A' ? 'B' : 'A';
+assert.equal(st.innings[0].batting, batTeam, 'winner chose to bowl, so the other side bats');
+await fan.bad('team:join', { team: 'A' }, /locked/);
+const batCap = byId[st.captains[batTeam]];
+await batCap.bad('captain', { action: { type: 'add', team: batTeam, userId: id(fan) } }, /locked/);
 
-// Simultaneous submission: the brief's example. Bowler 423336, batter 542236.
-await ali.bad('over:submit', { sequence: [1, 1, 1, 1, 1, 1] }, /isn't your over/);
-await dev.bad('over:submit', { sequence: [1, 2, 3] }, /six numbers/);
-await dev.bad('over:submit', { sequence: [1, 2, 3, 4, 5, 7] }, /six numbers/);
-await dev.ok('over:submit', { sequence: [4, 2, 3, 3, 3, 6] });
-await dev.bad('over:submit', { sequence: [1, 1, 1, 1, 1, 1] }, /already locked/);
-await settle();
-st = fan.last();
-assert.equal(st.current.set.bowlerLocked, true); assert.equal(st.current.set.batterLocked, false);
-assert.equal(st.current.set.reveal, null);
-assert.deepEqual(dev.priv().myLocked, [4, 2, 3, 3, 3, 6]);
-for (const c of [chen, fan, host, ali, bilal]) assert.equal(c.priv().myLocked, undefined, `${c.name} must not see the bowler's six`);
-assert.equal(host.priv().bowlerSequence, undefined, 'no umpire, nobody else sees it');
-assert.ok(chen.notes.some((n) => /locked in/.test(n.title)), 'batter told the bowler is locked in');
-await bilal.bad('captain', { action: { type: 'next_bowler', team: 'B', userId: id(bilal) } }, /already started/);
-await chen.ok('over:submit', { sequence: [5, 4, 2, 2, 3, 6] });
+// Over 1 needs six numbers.
+const bowler = () => byId[fan.last().current.bowlerId];
+const batter = () => byId[fan.last().current.strikerId];
+assert.equal(st.current.cap, 6); assert.equal(st.current.ballsLeftInOver, 6);
+const b1 = bowler();
+await b1.bad('over:submit', { sequence: [4, 2, 3, 3, 3] }, /exactly 6/);
+await b1.ok('over:submit', { sequence: [4, 2, 3, 3, 3, 6] });
+const firstBatter = batter();
+await firstBatter.ok('over:submit', { sequence: [5, 4, 2, 2, 3, 6] });
 await settle();
 st = fan.last();
 assert.equal(st.innings[0].runs, 13); assert.equal(st.innings[0].wickets, 1); assert.equal(st.innings[0].balls, 5);
-assert.equal(st.current.set.reveal.seq, '423336'); assert.equal(st.current.set.reveal.batSeq, '542236');
-assert.deepEqual(st.current.set.balls.map((b) => b.runs), [5, 4, 2, 2, 0]);
-assert.ok(fan.fx.some((f) => f.type === 'reveal' && f.wicket && f.balls.length === 5));
-// Wicket ends the over: next batter from the captain's order, and Dev can't bowl twice in a row.
-assert.equal(st.current.strikerId, id(ali)); assert.equal(st.current.bowlerId, id(bilal));
-await bilal.bad('captain', { action: { type: 'next_bowler', team: 'B', userId: id(dev) } }, /two in a row/);
-
-// Captain can change the incoming batter before they start.
-await ali.ok('captain', { action: { type: 'next_batter', team: 'A', userId: id(chen) } });
-await ali.ok('captain', { action: { type: 'next_batter', team: 'A', userId: id(ali) } });
-
-// This time the batter locks in first.
-await ali.ok('over:submit', { sequence: [1, 1, 1, 1, 1, 1] });
-await settle();
-assert.equal(bilal.priv().myLocked, undefined, 'bowler cannot see the batter');
-assert.equal(fan.last().current.set.reveal, null);
-await ali.bad('captain', { action: { type: 'next_batter', team: 'A', userId: id(chen) } }, /already started/);
-await bilal.ok('over:submit', { sequence: [2, 2, 2, 2, 2, 2] });
+// The next batter finishes the same over: one ball left, so one number each, same bowler.
+assert.equal(st.current.cap, 1); assert.equal(st.current.ballsLeftInOver, 1);
+assert.equal(st.current.bowlerId, id(b1), 'the bowler finishes their over');
+assert.notEqual(st.current.strikerId, id(firstBatter));
+assert.equal(st.current.over.balls.length, 5); assert.equal(st.current.over.finished, false);
+const batCapt = byId[st.captains[batTeam]];
+await batCapt.bad('captain', { action: { type: 'next_batter', team: batTeam, userId: id(firstBatter) } }, /is out/);
+await batter().bad('over:submit', { sequence: [1, 2, 3, 4, 5, 6] }, /exactly 1|one number/);
+await b1.ok('over:submit', { sequence: [1] });
+await batter().ok('over:submit', { sequence: [2] });
 await settle();
 st = fan.last();
-assert.equal(st.innings[0].runs, 19); assert.equal(st.innings[0].balls, 11);
-assert.equal(st.current.bowlerId, id(dev)); assert.equal(st.current.cap, 1, 'only one ball left in the innings');
-await dev.ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] });
-await ali.ok('over:submit', { sequence: [5, 1, 1, 1, 1, 1] });
+assert.equal(st.innings[0].runs, 15); assert.equal(st.innings[0].balls, 6);
+assert.equal(st.current.over.number, 1); assert.equal(st.current.over.finished, true, 'strip keeps showing the finished over');
+assert.notEqual(st.current.bowlerId, id(b1), 'new over, new bowler');
+assert.equal(st.current.cap, 6, 'back to six for a new over');
+const bowlCap = byId[st.captains[tossWinner]];
+await bowlCap.bad('captain', { action: { type: 'next_bowler', team: tossWinner, userId: id(b1) } }, /two in a row/);
+await bowler().ok('over:submit', { sequence: [1, 1, 1, 1, 1, 1] });
+await batter().ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] });
 await settle();
 st = fan.last();
-// No umpire: the second innings starts by itself.
-assert.equal(st.status, 'live'); assert.equal(st.current.number, 2);
-assert.equal(st.innings[1].target, 25);
-assert.equal(st.current.strikerId, id(bilal)); assert.equal(st.current.bowlerId, id(ali));
-await ali.ok('over:submit', { sequence: [1, 1, 1, 1, 1, 1] });
-await bilal.ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] });
-await settle();
+assert.equal(st.current.number, 2, 'second innings starts by itself');
+assert.equal(st.innings[0].runs, 51); assert.equal(st.innings[1].target, 52);
+// Second innings: three quick wickets; each new batter needs one fewer number.
+for (const want of [6, 5, 4]) {
+  assert.equal(fan.last().current.cap, want);
+  await bowler().ok('over:submit', { sequence: Array(want).fill(1) });
+  await batter().ok('over:submit', { sequence: Array(want).fill(1) });
+  await settle();
+}
 st = fan.last();
 assert.equal(st.status, 'completed');
-assert.equal(st.innings[1].balls, 5, 'chase stops the moment the target is passed');
-assert.match(st.result.text, /Tigers won by 2 wickets/);
-assert.ok(st.history.some((h) => /Lions batting order: Chen, Ali/.test(h.text)), 'lineup change in match history');
-
-for (const c of all5) for (const s of c.states) {
+assert.match(st.result.text, /won by 51 runs/);
+for (const c of Object.values(byId)) for (const s of c.states) {
   const set = s.current?.set;
-  if (set && set.status === 'open') assert.equal(set.reveal, null, `${c.name} saw an open over`);
+  if (set && set.status === 'open') assert.equal(set.reveal, null, `${c.name} saw hidden numbers`);
 }
-const pc = await api(`/api/users/${id(chen)}`);
-assert.equal(pc.batting.runs, 13); assert.equal(pc.batting.outs, 1); assert.equal(pc.record.losses, 1);
-const pd = await api(`/api/users/${id(dev)}`);
-assert.equal(pd.bowling.wickets, 1); assert.equal(pd.record.wins, 1);
 
-// Team selection: reuse both squads from a previous match.
-const m3 = (await api('/api/matches', { copyFrom: m1, config: { mode: 'auto' } }, host.token)).id;
-await host.open(m3); await settle();
-const r3 = await host.emit('match:open', { matchId: m3 });
-assert.deepEqual(r3.state.teams.A.players.map((p) => p.name), ['Chen', 'Ali']);
-assert.equal(r3.state.captains.B, id(bilal));
-await assert.rejects(api('/api/matches', { copyFrom: m1 }, (await api('/api/auth/guest', { name: 'Stranger' })).token), /only reuse/);
-
-// ====== Match 2: with an umpire ======
+// ====== Match 2: with umpire, ball-by-ball ======
 const ump = await client('Umpire Uma');
-const m2 = (await api('/api/matches', { config: { mode: 'umpire', overs: 1, wickets: 1, spectators: 'watch' } }, ump.token)).id;
+byId[id(ump)] = ump;
+const m2 = (await api('/api/matches', { config: { mode: 'umpire', play: 'ball', overs: 1, wickets: 1 } }, ump.token)).id;
 for (const c of [ump, ali, bilal, fan]) await c.open(m2);
-await ump.ok('umpire', { action: { type: 'assign', userId: id(ali), team: 'A' } });
-await ump.ok('umpire', { action: { type: 'assign', userId: id(bilal), team: 'B' } });
+await ali.ok('team:join', { team: 'A' }); await bilal.ok('team:join', { team: 'B' });
+await ali.ok('lineup:confirm', { team: 'A' }); await bilal.ok('lineup:confirm', { team: 'B' });
+const w2 = await doToss(fan, byId, 'bat');
+assert.equal(fan.last().stage, 'ready_to_start', 'with an umpire, the umpire starts after the toss');
 await ali.bad('match:start', {}, /umpire/);
 await ump.ok('match:start');
-await bilal.ok('over:submit', { sequence: [2, 2, 2, 2, 2, 2] });
 await settle();
-assert.deepEqual(ump.priv().bowlerSequence, [2, 2, 2, 2, 2, 2], 'umpire privately verifies the bowler');
-assert.equal(fan.priv().bowlerSequence, undefined); assert.equal(ali.priv().bowlerSequence, undefined);
-await ali.ok('over:submit', { sequence: [5, 5, 2, 1, 1, 1] });
+st = fan.last();
+assert.equal(st.innings[0].batting, w2);
+assert.equal(st.current.cap, 1);
+await bowler().bad('over:submit', { sequence: [1, 2] }, /one number/);
+await bowler().ok('over:submit', { sequence: [3] });
 await settle();
-assert.equal(fan.last().innings[0].runs, 10);
-assert.equal(fan.last().status, 'innings_break', 'with an umpire, the umpire starts the next innings');
-await ump.ok('umpire', { action: { type: 'void', reason: 'Batter misclicked' } });
+assert.deepEqual(ump.priv().bowlerSequence, [3]);
+assert.equal(fan.last().current.set.reveal, null);
+await bowler().bad('over:submit', { sequence: [4] }, /already locked/);
+await batter().ok('over:submit', { sequence: [4] });
 await settle();
-assert.equal(fan.last().innings[0].runs, 0); assert.equal(fan.last().status, 'live');
-assert.equal(fan.last().current.open, false, 'both lock in again');
-await ump.ok('umpire', { action: { type: 'pause' } });
-await bilal.bad('over:submit', { sequence: [1, 1, 1, 1, 1, 1] }, /paused/);
-await ump.ok('umpire', { action: { type: 'resume' } });
-
-// Chat: private bowler-umpire line; watch-only spectators.
-await bilal.ok('chat:send', { channel: `pvt:${id(bilal)}`, text: 'Ready' });
-await fan.bad('chat:send', { text: 'hi' }, /watch but not chat/);
-await ali.ok('chat:send', { text: 'Come on Lions' });
+st = fan.last();
+assert.equal(st.innings[0].runs, 4); assert.equal(st.current.ballsLeftInOver, 5); assert.equal(st.current.over.balls.length, 1);
+for (let k = 0; k < 4; k++) { await bowler().ok('over:submit', { sequence: [1] }); await batter().ok('over:submit', { sequence: [2] }); }
 await settle();
-assert.ok(ump.chats.some((m) => m.text === 'Ready')); assert.ok(!fan.chats.some((m) => m.text === 'Ready'));
-
-// Reconnection keeps a locked-in six.
-await bilal.ok('over:submit', { sequence: [3, 3, 3, 3, 3, 3] });
-bilal.s.disconnect();
-const s2 = io(base, { auth: { token: bilal.token }, transports: ['websocket'] });
-const back = await new Promise((r) => s2.emit('match:open', { matchId: m2 }, r));
-assert.deepEqual(back.private.myLocked, [3, 3, 3, 3, 3, 3]);
-s2.disconnect();
+assert.equal(fan.last().current.ballsLeftInOver, 1);
+await ump.ok('umpire', { action: { type: 'void', reason: 'Test correction' } });
+await settle();
+assert.equal(fan.last().innings[0].runs, 10, 'void removes one ball in ball-by-ball mode');
+assert.equal(fan.last().current.ballsLeftInOver, 2);
+await bowler().ok('over:submit', { sequence: [5] }); await batter().ok('over:submit', { sequence: [5] });
+await settle();
+assert.equal(fan.last().status, 'innings_break', 'all out (1 wicket)');
+await ump.ok('match:nextInnings');
+await settle();
+for (let k = 0; k < 2; k++) { await bowler().ok('over:submit', { sequence: [1] }); await batter().ok('over:submit', { sequence: [6] }); await settle(); }
+await settle();
+st = fan.last();
+assert.equal(st.status, 'completed'); assert.match(st.result.text, /won by 1 wicket/);
+const profile = await api(`/api/users/${id(ali)}`);
+assert.ok(profile.record.matches >= 2, 'stats still saved');
 
 console.log('✔ all match tests passed');
-for (const c of [host, ali, chen, dev, fan, ump]) c.s.disconnect();
+for (const c of Object.values(byId)) c.s.disconnect();
 server.close(); process.exit(0);

@@ -1,4 +1,5 @@
-// Locking in six numbers. The bowler and the batter use the same pad; neither sees the other's until both are in.
+// Locking in numbers. The bowler and the batter use the same pad and neither sees the other's until both are in.
+// The pad asks for exactly as many numbers as there are balls left in the over (or one, in ball-by-ball matches).
 import { useState } from 'react';
 import { emit } from '../api.js';
 import { useApp } from '../App.jsx';
@@ -8,16 +9,15 @@ export const NUM_COLORS = {
   4: 'bg-flood text-pitch-900', 5: 'bg-[#FF8A3D] text-pitch-900', 6: 'bg-leather text-chalk',
 };
 
-function Slots({ seq, onRemove, cap = 6, small }) {
+function Slots({ seq, count, onRemove, small }) {
   return (
-    <div className="grid grid-cols-6 gap-2">
-      {Array.from({ length: 6 }, (_, i) => {
+    <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.max(count, 3)}, minmax(0, 1fr))` }}>
+      {Array.from({ length: count }, (_, i) => {
         const n = seq[i];
-        const beyond = i >= cap;
         return (
           <button key={i} type="button" disabled={!onRemove || n == null} onClick={() => onRemove?.(i)}
             aria-label={n ? `Ball ${i + 1}: ${n}${onRemove ? '. Tap to remove.' : ''}` : `Ball ${i + 1}: empty`}
-            className={`relative aspect-square rounded-xl font-display font-extrabold ${small ? 'text-2xl' : 'text-4xl'} ${n ? `${NUM_COLORS[n]} pop` : 'border-2 border-dashed border-pitch-500 text-chalk-faint'} ${beyond ? 'opacity-40' : ''}`}>
+            className={`aspect-square max-h-24 rounded-xl font-display font-extrabold ${small ? 'text-2xl' : 'text-4xl'} ${n ? `${NUM_COLORS[n]} pop` : 'border-2 border-dashed border-pitch-500 text-chalk-faint'}`}>
             {n ?? <span className="text-base font-semibold">{i + 1}</span>}
           </button>
         );
@@ -25,6 +25,8 @@ function Slots({ seq, onRemove, cap = 6, small }) {
     </div>
   );
 }
+
+const overLine = (cur) => `Over ${cur.overNumber}, ball ${cur.ballInOver}. ${cur.ballsLeftInOver} ball${cur.ballsLeftInOver === 1 ? '' : 's'} left in the over.`;
 
 export function SubmitOver({ state, role, cur, priv }) {
   const { toast } = useApp();
@@ -34,7 +36,8 @@ export function SubmitOver({ state, role, cur, priv }) {
   const set = cur.open ? cur.set : null;
   const otherLocked = role === 'bowl' ? set?.batterLocked : set?.bowlerLocked;
   const otherName = role === 'bowl' ? cur.strikerName : cur.bowlerName;
-  const cap = cur.cap;
+  const need = cur.cap;
+  const single = need === 1;
 
   if (priv.myLocked) {
     return (
@@ -43,52 +46,77 @@ export function SubmitOver({ state, role, cur, priv }) {
           <h2 className="font-display text-2xl font-bold">You're locked in</h2>
           <span className="rounded-full bg-turf px-3 py-1 text-sm font-bold text-pitch-900">🔒 Submitted</span>
         </div>
-        <p className="mb-3 mt-1 text-sm text-chalk-dim">Only you can see these. They can't be changed.</p>
-        <Slots seq={priv.myLocked} cap={cap} small />
+        <p className="mb-3 mt-1 text-sm text-chalk-dim">Only you can see {single ? 'this' : 'these'}. {single ? 'It' : 'They'} can't be changed.</p>
+        <Slots seq={priv.myLocked} count={priv.myLocked.length} small />
         <div className="mt-4 flex items-center gap-3 rounded-xl bg-pitch-900/60 px-4 py-3">
           <span className="relative flex h-3 w-3"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-flood opacity-75" /><span className="relative inline-flex h-3 w-3 rounded-full bg-flood" /></span>
-          <span>Waiting for <b>{otherName}</b> to lock in. The over is revealed the moment they do.</span>
+          <span>Waiting for <b>{otherName}</b>. {single ? 'The ball' : 'The over'} is revealed the moment they lock in.</span>
         </div>
       </section>
     );
   }
 
-  const add = (n) => { if (seq.length < 6) { setSeq([...seq, n]); setConfirm(false); } };
-  const random = () => { setSeq(Array.from({ length: 6 }, () => 1 + Math.floor(Math.random() * 6))); setConfirm(false); };
-  const submit = async () => {
-    if (!confirm) { setConfirm(true); return; }
+  const submit = async (digits) => {
     setBusy(true);
-    const r = await emit('over:submit', { matchId: state.id, sequence: seq });
+    const r = await emit('over:submit', { matchId: state.id, sequence: digits });
     setBusy(false);
-    if (!r.ok) { toast({ title: 'Over not submitted', body: r.error }); setConfirm(false); }
+    if (!r.ok) { toast({ title: 'Not submitted', body: r.error }); setConfirm(false); }
     else setSeq([]);
   };
+  const add = (n) => { if (seq.length < need) { setSeq([...seq, n]); setConfirm(false); } };
+  const random = () => { setSeq(Array.from({ length: need }, () => 1 + Math.floor(Math.random() * 6))); setConfirm(false); };
+  const header = (
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <h2 className="font-display text-3xl font-extrabold leading-none">
+          {single ? (role === 'bowl' ? 'Bowl this ball' : 'Play this ball') : role === 'bowl' ? `Bowl ${need} balls` : `Bat ${need} balls`}
+        </h2>
+        <p className="mt-1 text-sm text-chalk-dim">
+          {overLine(cur)}{' '}
+          {role === 'bowl' ? `If ${otherName} picks the same number, they're out.` : `Score what you pick, unless ${otherName} picked the same.`}
+        </p>
+      </div>
+      <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${otherLocked ? 'bg-flood text-pitch-900' : 'bg-pitch-600 text-chalk-dim'}`}>
+        {otherLocked ? `${otherName} is locked in` : `${otherName} is choosing`}
+      </span>
+    </div>
+  );
+
+  if (single) {
+    // Ball by ball (or the last ball of an over): pick one number, then lock it in.
+    const pick = seq[0];
+    return (
+      <section className="panel your-turn p-4" aria-label="Submit your number">
+        {header}
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          {[1, 2, 3, 4, 5, 6].map((n) => (
+            <button key={n} type="button" onClick={() => setSeq([n])} aria-pressed={pick === n}
+              className={`aspect-[5/4] rounded-2xl font-display text-6xl font-extrabold shadow-lg transition ${NUM_COLORS[n]} ${pick === n ? 'scale-105 ring-4 ring-chalk' : pick ? 'opacity-50' : ''}`}>{n}</button>
+          ))}
+        </div>
+        <button type="button" className="btn-go mt-4 w-full py-4 text-2xl" disabled={!pick || busy} onClick={() => submit([pick])}>
+          {pick ? `Lock in ${pick}` : 'Pick a number'}
+        </button>
+      </section>
+    );
+  }
+
   return (
     <section className="panel your-turn p-4" aria-label="Submit your over">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="font-display text-3xl font-extrabold leading-none">{role === 'bowl' ? 'Bowl your over' : 'Bat your over'}</h2>
-          <p className="mt-1 text-sm text-chalk-dim">
-            {role === 'bowl' ? `Pick six numbers. Any ball where ${otherName} picks the same number, they're out.` : `Pick six numbers. You score what you pick, unless ${otherName} picked the same number for that ball.`}
-          </p>
-        </div>
-        <span className={`shrink-0 rounded-full px-3 py-1 text-xs font-bold ${otherLocked ? 'bg-flood text-pitch-900' : 'bg-pitch-600 text-chalk-dim'}`}>
-          {otherLocked ? `${otherName} is locked in` : `${otherName} is choosing`}
-        </span>
-      </div>
-      {cap < 6 && <p className="mt-2 text-sm text-flood">Only the first {cap} ball{cap === 1 ? '' : 's'} count{cap === 1 ? 's' : ''}: that's all that's left in the innings.</p>}
-      <div className="mt-4"><Slots seq={seq} cap={cap} onRemove={(i) => { setSeq(seq.filter((_, j) => j !== i)); setConfirm(false); }} /></div>
+      {header}
+      <div className="mt-4"><Slots seq={seq} count={need} onRemove={(i) => { setSeq(seq.filter((_, j) => j !== i)); setConfirm(false); }} /></div>
       <div className="mt-3 grid grid-cols-6 gap-2">
         {[1, 2, 3, 4, 5, 6].map((n) => (
-          <button key={n} type="button" onClick={() => add(n)} disabled={seq.length >= 6}
+          <button key={n} type="button" onClick={() => add(n)} disabled={seq.length >= need}
             className={`rounded-xl py-4 font-display text-3xl font-extrabold shadow-md transition active:scale-95 disabled:opacity-35 ${NUM_COLORS[n]}`}>{n}</button>
         ))}
       </div>
       <div className="mt-3 flex gap-2">
         <button type="button" className="btn-ghost" onClick={random}>Random</button>
         <button type="button" className="btn-ghost" onClick={() => { setSeq([]); setConfirm(false); }} disabled={!seq.length}>Reset</button>
-        <button type="button" className={`${confirm ? 'btn-flood' : 'btn-go'} flex-1`} disabled={seq.length !== 6 || busy} onClick={submit}>
-          {confirm ? `Lock in ${seq.join(' ')}` : seq.length === 6 ? 'Submit over' : `${6 - seq.length} more`}
+        <button type="button" className={`${confirm ? 'btn-flood' : 'btn-go'} flex-1`} disabled={seq.length !== need || busy}
+          onClick={() => (confirm ? submit(seq) : setConfirm(true))}>
+          {confirm ? `Lock in ${seq.join(' ')}` : seq.length === need ? 'Submit over' : `${need - seq.length} more`}
         </button>
       </div>
       {confirm && <p className="mt-2 text-sm text-flood">Once submitted you can't change it. Tap again to lock in.</p>}
@@ -96,8 +124,8 @@ export function SubmitOver({ state, role, cur, priv }) {
   );
 }
 
-// What everyone else sees while the over is being chosen.
-export function OverStatus({ cur, me }) {
+// What everyone else sees while the numbers are being chosen.
+export function OverStatus({ cur, me, single }) {
   const set = cur.open ? cur.set : null;
   const row = (label, name, locked) => (
     <div className="flex items-center justify-between rounded-xl bg-pitch-900/60 px-4 py-3">
@@ -110,10 +138,11 @@ export function OverStatus({ cur, me }) {
   const next = cur.strikerId === me ? "You're batting soon." : cur.bowlerId === me ? "You're bowling soon." : null;
   return (
     <section className="panel space-y-2 p-4" aria-live="polite">
-      <h2 className="font-display text-2xl font-bold">Over in progress</h2>
+      <h2 className="font-display text-2xl font-bold">{single ? `Ball ${cur.ballInOver} of over ${cur.overNumber}` : `Over ${cur.overNumber}`}</h2>
+      <p className="text-sm text-chalk-dim">{overLine(cur)}</p>
       {row('Bowling', cur.bowlerName, set?.bowlerLocked)}
       {row('Batting', cur.strikerName, set?.batterLocked)}
-      <p className="text-sm text-chalk-dim">{next || 'Both sixes stay hidden until both are locked in. Then the whole over is revealed.'}</p>
+      <p className="text-sm text-chalk-dim">{next || 'Both picks stay hidden until both are locked in.'}</p>
     </section>
   );
 }

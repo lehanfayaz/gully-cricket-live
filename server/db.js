@@ -144,7 +144,16 @@ addColumn('sets', 'bat_hash', 'TEXT');
 addColumn('sets', 'bowl_at', 'INTEGER');
 addColumn('sets', 'bat_at', 'INTEGER');
 addColumn('sets', 'revealed_at', 'INTEGER');
-addColumn('audit', 'text', 'TEXT');                                 // readable line for match history
+addColumn('audit', 'text', 'TEXT');
+// Lineup confirmation and the toss
+addColumn('matches', 'confirm_a', 'INTEGER');                      // timestamp the captain confirmed, NULL = pending
+addColumn('matches', 'confirm_b', 'INTEGER');
+addColumn('matches', 'toss_caller', 'TEXT');                       // team whose captain calls ('A' | 'B')
+addColumn('matches', 'toss_call', 'TEXT');                         // 'heads' | 'tails'
+addColumn('matches', 'toss_result', 'TEXT');                       // 'heads' | 'tails'
+addColumn('matches', 'toss_winner', 'TEXT');                       // 'A' | 'B'
+addColumn('matches', 'toss_decision', 'TEXT');                     // 'bat' | 'bowl'
+addColumn('matches', 'toss_at', 'INTEGER');                                 // readable line for match history
 
 const cache = new Map();
 const stmt = (sql) => {

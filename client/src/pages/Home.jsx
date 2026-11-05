@@ -39,7 +39,7 @@ function Hero({ compact }) {
       </h1>
       {!compact && (
         <p className="mt-4 max-w-md text-lg text-chalk-dim">
-          Bowler and batter each lock in six numbers. Then the over is revealed ball by ball: a match and you're out, a miss and you score what you picked.
+          Bowler and batter each lock in their numbers, then the reveal: same number and you're out, different and you score what you picked.
           Everyone plays live from their own phone.
         </p>
       )}
@@ -88,8 +88,8 @@ function CreateMatch() {
   const nav = useNavigate();
   const [step, setStep] = useState(0);
   const [f, setF] = useState({
-    name: '', overs: 2, wickets: 3, playersPerTeam: 11, mode: 'auto', superOver: true, freshSetAfterWicket: true,
-    noConsecutive: true, spectators: 'open', teamA: 'Lions', teamB: 'Tigers', tossBat: 'A', copyFrom: '',
+    name: '', overs: 2, wickets: 3, playersPerTeam: 11, mode: 'auto', play: 'over', superOver: true,
+    noConsecutive: true, spectators: 'open', teamA: 'Lions', teamB: 'Tigers', copyFrom: '',
   });
   const [past, setPast] = useState([]);
   const [err, setErr] = useState('');
@@ -103,10 +103,10 @@ function CreateMatch() {
   const create = async () => {
     setBusy(true); setErr('');
     try {
-      const { overs, wickets, playersPerTeam, mode, superOver, freshSetAfterWicket, noConsecutive, spectators } = f;
+      const { overs, wickets, playersPerTeam, mode, play, superOver, noConsecutive, spectators } = f;
       const r = await api('/api/matches', { body: {
-        name: f.name || `${f.teamA} v ${f.teamB}`, teamA: f.teamA, teamB: f.teamB, tossBat: f.tossBat, copyFrom: f.copyFrom || undefined,
-        config: { overs, wickets, playersPerTeam, mode, superOver, freshSetAfterWicket, noConsecutive, spectators } } });
+        name: f.name || `${f.teamA} v ${f.teamB}`, teamA: f.teamA, teamB: f.teamB, copyFrom: f.copyFrom || undefined,
+        config: { overs, wickets, playersPerTeam, mode, play, superOver, noConsecutive, spectators } } });
       nav(`/m/${r.id}`);
     } catch (x) { setErr(x.message); setBusy(false); }
   };
@@ -140,6 +140,14 @@ function CreateMatch() {
 
         {step === 1 && <>
           <div>
+            <span className="label">How players submit</span>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Choice selected={f.play === 'over'} onClick={() => set('play')('over')} title="Complete over" body="Bowler and batter each lock in the numbers for the rest of the over. The whole over is revealed at once." />
+              <Choice selected={f.play === 'ball'} onClick={() => set('play')('ball')} title="Ball by ball" body="Both pick one number per ball. Each ball is revealed as soon as both are in." />
+            </div>
+            <p className="mt-1 text-xs text-chalk-faint">This can't be changed once the match is created.</p>
+          </div>
+          <div>
             <span className="label">Umpire</span>
             <div className="grid gap-2 sm:grid-cols-2">
               <Choice selected={f.mode === 'auto'} onClick={() => set('mode')('auto')} title="No umpire" body="The game runs itself: scoring, innings changes and the result are automatic." />
@@ -147,7 +155,6 @@ function CreateMatch() {
             </div>
           </div>
           <div className="divide-y divide-pitch-600">
-            <Toggle label="A wicket ends the over" hint="The new batter and bowler start a fresh over. Turn off to let the over carry on." checked={f.freshSetAfterWicket} onChange={set('freshSetAfterWicket')} />
             <Toggle label="No bowling two overs in a row" checked={f.noConsecutive} onChange={set('noConsecutive')} />
             <Toggle label="Super over on a tie" checked={f.superOver} onChange={set('superOver')} />
           </div>
@@ -175,16 +182,7 @@ function CreateMatch() {
             <div><label className="label" htmlFor="ta">Team one</label><input id="ta" className="field" value={f.teamA} onChange={set('teamA')} maxLength={30} /></div>
             <div><label className="label" htmlFor="tb">Team two</label><input id="tb" className="field" value={f.teamB} onChange={set('teamB')} maxLength={30} /></div>
           </div>
-          <div>
-            <span className="label">Batting first</span>
-            <div className="flex gap-2">
-              {['A', 'B'].map((t) => (
-                <button key={t} type="button" onClick={() => set('tossBat')(t)} aria-pressed={f.tossBat === t}
-                  className={`flex-1 truncate rounded-lg px-2 py-2 font-display text-lg font-bold ${f.tossBat === t ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{t === 'A' ? f.teamA : f.teamB}</button>
-              ))}
-            </div>
-          </div>
-          <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">Next you'll get the invite link. Friends join, pick a team (the first one in each team is captain), and captains set the batting and bowling orders.</p>
+          <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">Next you'll get the invite link. Friends join and pick a team (the first one in each team is captain). Both captains confirm their lineups, then the toss decides who bats first.</p>
         </>}
       </div>
 

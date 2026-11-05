@@ -42,12 +42,12 @@ export default function UmpirePanel({ state, priv }) {
           <p className="text-sm text-chalk-dim">{cur.bowlerName} bowling to {cur.strikerName}.</p>
           {priv.bowlerSequence ? (
             <div>
-              <div className="mb-1 text-sm text-chalk-dim">Bowler's six (only you can see this; the batter's stay hidden until the reveal)</div>
+              <div className="mb-1 text-sm text-chalk-dim">Bowler's {priv.bowlerSequence.length === 1 ? 'number' : 'numbers'} (only you can see this; the batter's stay hidden until the reveal)</div>
               <div className="grid grid-cols-6 gap-2">
                 {priv.bowlerSequence.map((n, i) => <div key={i} className={`grid aspect-square place-items-center rounded-xl font-display text-2xl font-extrabold ${NUM_COLORS[n]}`}>{n}</div>)}
               </div>
             </div>
-          ) : <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">{cur.set?.status === 'open' && cur.set.bowlerLocked ? "You're batting in this over, so the bowler's six stay hidden from you too." : "The bowler's six will appear here when they lock in."}</p>}
+          ) : <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">{cur.set?.status === 'open' && cur.set.bowlerLocked ? "You're batting, so the bowler's numbers stay hidden from you too." : "The bowler's numbers will appear here when they lock in."}</p>}
         </section>
       )}
 
@@ -59,13 +59,13 @@ export default function UmpirePanel({ state, priv }) {
             <input id="rs" className="field" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={140} placeholder="e.g. Ali's phone submitted by mistake" />
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <button className="btn-ghost" onClick={() => needReason(() => act({ type: 'void', reason }, 'Last over voided'))}>Void the last over</button>
+            <button className="btn-ghost" onClick={() => needReason(() => act({ type: 'void', reason }, 'Last over voided'))}>Void the last reveal</button>
             <div className="flex gap-2">
               <input type="number" aria-label="Runs to add or remove" className="field w-24" value={adjust} min={-50} max={50} onChange={(e) => setAdjust(e.target.value)} />
               <button className="btn-ghost flex-1" onClick={() => needReason(() => act({ type: 'adjust', runs: Number(adjust), reason }, 'Runs adjusted'))}>Adjust runs</button>
             </div>
           </div>
-          <p className="text-xs text-chalk-faint">Voiding cancels every ball of the last revealed over; both players lock in again.</p>
+          <p className="text-xs text-chalk-faint">Voiding cancels the last revealed submission (the last ball in ball-by-ball matches); both players lock in again.</p>
         </section>
       )}
 

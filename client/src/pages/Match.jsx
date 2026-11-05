@@ -64,6 +64,7 @@ function Live({ id, me }) {
         if (pick) show({ type: pick, batter: f.batter }, end);
         return;
       }
+      if (f.type === 'toss') return; // the coin animates in the toss panel
       show(f, Math.max(Date.now(), revealEnd.current + (f.type === 'result' || f.type === 'tie' ? 1900 : 0)));
     };
     const onCheer = (c) => {
@@ -184,16 +185,16 @@ function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
   let panel = null;
   if (state.status === 'innings_break') panel = <InningsBreak state={state} isUmp={isUmp} />;
   else if (cur.phase === 'paused') panel = <Waiting title="Play is paused" body="The umpire will resume the match shortly." />;
-  else if (role) panel = <SubmitOver key={`${cur.number}-${cur.set?.id}-${cur.open}`} state={state} role={role} cur={cur} priv={priv} />;
-  else panel = <OverStatus cur={cur} me={me} />;
+  else if (role) panel = <SubmitOver key={`${cur.number}-${cur.overNumber}-${cur.ballInOver}-${cur.open}`} state={state} role={role} cur={cur} priv={priv} />;
+  else panel = <OverStatus cur={cur} me={me} single={state.play === 'ball'} />;
   return (
     <>
       <section className="panel mown p-4">
         <div className="mb-3 flex items-baseline justify-between">
-          <h2 className="font-display text-xl font-bold">{cur?.open ? 'This over' : 'Last over'}</h2>
-          <span className="text-sm text-chalk-dim">Run rate {cur?.runRate}</span>
+          <h2 className="font-display text-xl font-bold">{cur?.over ? `Over ${cur.over.number}${cur.over.finished ? ', finished' : ''}` : 'This over'}</h2>
+          <span className="text-sm text-chalk-dim">{cur && state.status === 'live' && !cur.over?.finished ? `${cur.ballsLeftInOver} ball${cur.ballsLeftInOver === 1 ? '' : 's'} left` : `Run rate ${cur?.runRate}`}</span>
         </div>
-        <div className="mx-auto max-w-lg"><OverStrip set={cur?.set} /></div>
+        <div className="mx-auto max-w-lg"><OverStrip over={cur?.over} /></div>
       </section>
       {panel}
       {captainHere && state.status === 'live' && !cur.open && (

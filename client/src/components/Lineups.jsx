@@ -86,6 +86,10 @@ export function TeamLineup({ state, team, priv, me }) {
     return map;
   };
   const bat = card('batting'), bowl = card('bowling');
+  const confirm = async () => {
+    const r = await emit('lineup:confirm', { matchId: state.id, team });
+    if (!r.ok) toast({ title: 'Lineup not confirmed', body: r.error });
+  };
   const act = async (action) => {
     const r = await emit('captain', { matchId: state.id, action: { team, ...action } });
     if (!r.ok) toast({ title: 'Lineup not changed', body: r.error });
@@ -102,10 +106,19 @@ export function TeamLineup({ state, team, priv, me }) {
 
   return (
     <section className="panel space-y-4 p-4">
-      <header className="flex items-baseline justify-between gap-2">
+      <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="font-display text-3xl font-extrabold">{t.name}</h2>
-        <span className="text-sm text-chalk-dim">{isCaptain ? "You're captain" : `Captain: ${state.members.find((m) => m.id === state.captains[team])?.name || 'none yet'}`}</span>
+        <span className="flex items-center gap-2 text-sm text-chalk-dim">
+          {isCaptain ? "You're captain" : `Captain: ${state.members.find((m) => m.id === state.captains[team])?.name || 'none yet'}`}
+          {state.status === 'lobby' && (state.lineups[team].confirmedAt
+            ? <Tag tone="live">Confirmed</Tag> : <Tag>Pending</Tag>)}
+        </span>
       </header>
+      {can && state.status === 'lobby' && !state.toss.result && (
+        state.lineups[team].confirmedAt
+          ? <p className="rounded-lg bg-pitch-900/60 p-2.5 text-sm text-chalk-dim">Confirmed. Any change before the toss means confirming again.</p>
+          : <button className="btn-go w-full" disabled={!t.players.length} onClick={confirm}>Confirm this lineup</button>
+      )}
       {!t.players.length && <p className="text-chalk-dim">No players yet.</p>}
 
       {t.players.length > 0 && (
@@ -130,7 +143,7 @@ export function TeamLineup({ state, team, priv, me }) {
                   {nextUp?.id === p.id && !onStrike && <Tag tone="next">Next in</Tag>}
                   {batting && !onStrike && !outs && nextUp?.id !== p.id && !s && <Tag>Yet to bat</Tag>}
                   {s && <span className="text-sm tabular-nums text-chalk-dim">{s.runs} ({s.balls})</span>}
-                  {can && batting && cur.strikerFresh && !onStrike && (
+                  {can && batting && cur.strikerFresh && !onStrike && outs <= Math.min(...order.map((x) => dismissed[x.id] || 0)) && (
                     <button className="ml-auto rounded-lg bg-pitch-600 px-2 py-1 text-xs font-semibold hover:bg-pitch-500" onClick={() => act({ type: 'next_batter', userId: p.id })}>Send in now</button>
                   )}
                 </div>
@@ -144,7 +157,7 @@ export function TeamLineup({ state, team, priv, me }) {
           <h3 className="mb-1.5 flex items-baseline justify-between font-display text-xl font-bold">
             Bowling order {bowling && <span className="text-sm font-medium text-turf">bowling now</span>}
           </h3>
-          {can && <p className="mb-2 text-xs text-chalk-dim">Overs go down this list in turn{state.config.noConsecutive ? ', and nobody bowls two in a row' : ''}. Pick who bowls the next over any time before it starts.</p>}
+          {can && <p className="mb-2 text-xs text-chalk-dim">Overs go down this list in turn{state.config.noConsecutive ? ', and nobody bowls two in a row' : ''}. A bowler always finishes their over; you can pick who bowls the next one before it starts.</p>}
           <SortableList items={bowlers} keyOf={(p) => p.id} enabled={can}
             onCommit={(next) => act({ type: 'bowl_order', userIds: next.map((p) => p.id) })}
             render={(p) => {
@@ -159,10 +172,10 @@ export function TeamLineup({ state, team, priv, me }) {
                   {s && <span className="text-sm tabular-nums text-chalk-dim">{Math.floor(s.balls / 6)}.{s.balls % 6} ov, {s.wickets}-{s.runs}</span>}
                   {can && (
                     <span className="ml-auto flex gap-1">
-                      {bowling && !cur.open && !nextBowler && !blocked && (
+                      {bowling && !cur.open && cur.ballInOver === 1 && !nextBowler && !blocked && (
                         <button className="rounded-lg bg-pitch-600 px-2 py-1 text-xs font-semibold hover:bg-pitch-500" onClick={() => act({ type: 'next_bowler', userId: p.id })}>Bowl next over</button>
                       )}
-                      {bowlers.length > 1 && (
+                      {bowlers.length > 1 && !(bowling && nextBowler && (cur.open || cur.ballInOver > 1)) && (
                         <button className="rounded-lg px-2 py-1 text-xs text-chalk-dim hover:bg-pitch-600" onClick={() => act({ type: 'bowl_order', userIds: bowlers.filter((b) => b.id !== p.id).map((b) => b.id) })}>Rest</button>
                       )}
                     </span>
@@ -195,7 +208,7 @@ export function TeamLineup({ state, team, priv, me }) {
         </div>
       )}
 
-      {can && (
+      {can && state.status === 'lobby' && !state.toss.result && (
         <details className="rounded-xl bg-pitch-900/50 p-3">
           <summary className="cursor-pointer font-semibold">Squad changes</summary>
           <div className="mt-3 space-y-3 text-sm">

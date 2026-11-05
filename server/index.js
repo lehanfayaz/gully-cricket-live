@@ -219,8 +219,9 @@ io.on('connection', (socket) => {
 
   socket.on('match:start', handle((id, p, ctx) => G.startMatch(user.id, id, ctx)));
   socket.on('match:nextInnings', handle((id, p, ctx) => G.nextInnings(user.id, id, ctx)));
-  socket.on('bowler:submit', handle((id, p, ctx) => G.submitSequence(user.id, id, p.sequence, ctx)));
-  socket.on('batter:play', handle((id, p, ctx) => G.playBall(user.id, id, p.number, p.ballNo, ctx)));
+  socket.on('over:submit', handle((id, p, ctx) => G.submitOver(user.id, id, p.sequence, ctx)));
+  socket.on('captain', handle((id, p, ctx) => G.captainAction(user.id, id, p.action || {}, ctx)));
+  socket.on('team:join', handle((id, p, ctx) => G.joinTeam(user.id, id, p.team, ctx)));
   socket.on('umpire', handle((id, p, ctx) => {
     G.umpireAction(user.id, id, p.action || {}, ctx);
     if (p.action?.type === 'delete_message') {

@@ -129,6 +129,23 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 `);
 
+// ---- in-place upgrades for databases created by earlier versions ----
+function addColumn(table, col, def) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
+addColumn('matches', 'captain_a', 'TEXT');
+addColumn('matches', 'captain_b', 'TEXT');
+addColumn('members', 'bowl_order', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('members', 'bowls', 'INTEGER NOT NULL DEFAULT 1');      // in the bowling lineup?
+addColumn('sets', 'bat_seq', 'TEXT');                               // batter's six, sealed until both are in
+addColumn('sets', 'bat_salt', 'TEXT');
+addColumn('sets', 'bat_hash', 'TEXT');
+addColumn('sets', 'bowl_at', 'INTEGER');
+addColumn('sets', 'bat_at', 'INTEGER');
+addColumn('sets', 'revealed_at', 'INTEGER');
+addColumn('audit', 'text', 'TEXT');                                 // readable line for match history
+
 const cache = new Map();
 const stmt = (sql) => {
   let s = cache.get(sql);

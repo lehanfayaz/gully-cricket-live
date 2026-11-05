@@ -1,14 +1,20 @@
-# Gully Cricket Live
+# FOOTY CRICKET LEAGUE
 
 A real-time multiplayer number-cricket game that runs in the browser. One person creates a match and umpires, friends join from a link on their own phones, and everything happens in the app: sealing the bowler's numbers, batting, chat, notifications, scoring, and saved stats. No WhatsApp needed.
 
-## How a ball works
+## How an over works
 
-1. The bowler secretly seals six numbers (1–6) for the over.
-2. The batter picks a number for each ball.
-3. Same number as the bowler: the batter is out and the rest of that sequence is thrown away.
-4. Different number: the batter scores the number they picked.
-5. A new batter gets a fresh six-number sequence (you can turn this off per match so the over continues instead).
+1. The bowler and the batter each lock in six numbers (1–6), in any order. Neither can see the other's.
+2. The moment both are locked in, the server compares them ball by ball and reveals the whole over.
+3. Same number on a ball: the batter is out and the rest of the over is ignored.
+4. Different number: the batter scores what they picked.
+5. The next over (or the new batter after a wicket) starts with fresh sequences from both.
+
+## Match modes and captains
+
+- **No umpire**: fully automatic. Scoring, wickets, innings changes, super overs and the result need nobody. The creator is the "host": they can moderate chat and end a match early, nothing more.
+- **With umpire**: the creator umpires. They start each innings, can pause, void the last over, adjust runs, end early, and privately see the bowler's six (never the batter's).
+- **Captains**: each team has one, by default the first player to join. Only the captain can change their team's batting order (openers at the top), bowling order, next bowler, next batter and squad. This is checked on the server. Every lineup change is written to the match history.
 
 ## Run it locally
 
@@ -55,17 +61,18 @@ test/match.test.js   End-to-end test with four socket clients
 ## Integrity and security
 
 - **The server decides everything.** Clients only send intents ("seal these six numbers", "I pick 4 for ball 7"). Runs, wickets, overs, innings changes and results are all calculated on the server inside a database transaction.
-- **The bowler's sequence stays secret.** It is stored on the server and sent only to the bowler's own device. The public state never contains it while the over is open. When the over ends, the sequence is revealed together with a salt, and everyone can check it against the SHA-256 fingerprint that was published at the moment it was sealed. So the bowler can't change it afterwards either.
-- **The umpire can't peek.** The umpire is told a sequence was sealed but can't see it. For a dispute, "Open sealed over" shows it to the umpire only. That needs a reason, is announced to everyone, and is recorded in the audit trail. It's blocked if the umpire is also the batter.
-- **No double plays.** Each shot carries the ball number it is for. A repeated or late tap is rejected, a sealed over can't be resubmitted, and only the current batter or bowler can act.
-- **Corrections are audited.** Voiding a ball or adjusting runs requires a reason and is announced in chat. A voided ball's over is closed and the bowler seals a fresh one, because its numbers were already revealed.
-- **Reconnects are seamless.** All state lives in the database. A phone that drops and comes back gets the full match, its private chat and (for the bowler) its sealed sequence again.
+- **Both sequences stay secret until both are in.** Each is stored on the server and sent back only to the player who entered it. The public state only says "locked in". The reveal happens inside one database transaction when the second sequence arrives. Afterwards both sequences and their salts are published, so anyone can check them against the SHA-256 fingerprints.
+- **No changes, no duplicates.** A locked-in sequence can't be resubmitted or edited, and only the current bowler and batter can submit.
+- **Captain permissions are enforced on the server.** A request from anyone but that team's captain is rejected, and lineups lock once an over has started.
+- **Corrections are audited.** Voiding the last over or adjusting runs needs a reason, is announced in chat and is kept in the match history.
+- **Reconnects are seamless.** A phone that drops and comes back gets the full match and its own locked-in sequence again.
+- **Upgrades keep your data.** New columns are added to an existing database on start-up, so matches and stats from earlier versions carry over.
 - **Accounts.** Guests get a random 256-bit session token. Registered users' passwords are hashed with scrypt. A guest can add a username and password later and keep all their stats.
 
 ## Rules decisions you can change
 
-- **Batting order cycles.** If a team has fewer players than wickets (for example 1 v 1 with 3 wickets), the order loops, so the same player bats again.
-- **Overs are counted in legal balls.** With "fresh six balls after a wicket" on, a new batter's sequence can carry on past the old over boundary. The innings still ends after overs × 6 balls, and the last sequence is cut short to fit.
+- **Batting order cycles.** If a team has fewer players than wickets (for example 1 v 1 with 3 wickets), the next batter is whoever in the order has been out the fewest times, so the same player can bat again.
+- **Overs are counted in balls.** With "a wicket ends the over" on, the scoreboard counts the balls actually played. The innings ends after overs × 6 balls, and the last over is cut short to fit (players still enter six numbers; only the first ones count).
 - **Super over.** It's 6 balls with 2 wickets. The team that batted second bats first. A second tie is recorded as a tie.
 - **Ranking points** are runs + 20 per wicket taken + 25 per win.
 

@@ -11,6 +11,7 @@ export default function Chat({ state, me, priv, messages, className = '' }) {
   const { toast } = useApp();
   const isUmp = priv?.isUmpire;
   const mine = state.members.find((m) => m.id === me);
+  const watchOnly = state.config.spectators === 'watch' && !mine?.team && !priv?.isHost;
   const [channel, setChannel] = useState('public');
   const [text, setText] = useState('');
   const [seen, setSeen] = useState({});
@@ -26,7 +27,7 @@ export default function Chat({ state, me, priv, messages, className = '' }) {
         const name = state.members.find((m) => m.id === id)?.name || 'Player';
         list.push({ key: `pvt:${id}`, label: `🔒 ${name}` });
       }
-    } else if (mine?.team) list.push({ key: `pvt:${me}`, label: '🔒 Umpire' });
+    } else if (mine?.team && state.mode === 'umpire') list.push({ key: `pvt:${me}`, label: '🔒 Umpire' });
     return list;
   }, [isUmp, messages, state.current?.bowlerId, state.members, me, mine?.team]);
 
@@ -69,17 +70,17 @@ export default function Chat({ state, me, priv, messages, className = '' }) {
       )}
       <div ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
         {shown.length === 0 && <p className="text-center text-sm text-chalk-dim">{channel === 'public' ? 'Say something to get the stands going.' : 'No messages yet.'}</p>}
-        {shown.map((m) => <Message key={m.id} m={m} me={me} state={state} isUmp={isUmp} />)}
+        {shown.map((m) => <Message key={m.id} m={m} me={me} state={state} isUmp={priv?.isHost} />)}
       </div>
-      {channel === 'public' && (
+      {channel === 'public' && !watchOnly && (
         <div className="flex justify-around border-t border-pitch-600 px-2 py-1" aria-label="Send a cheer to the stadium">
           {CHEERS.map((e) => <button key={e} onClick={() => cheer(e)} className="rounded-lg px-2 py-1 text-2xl transition hover:bg-pitch-600 active:scale-90" aria-label={`Cheer ${e}`}>{e}</button>)}
         </div>
       )}
       <form onSubmit={send} className="flex gap-2 border-t border-pitch-600 p-2">
         <input aria-label="Message" className="field py-2.5" value={text} onChange={(e) => setText(e.target.value)} maxLength={300}
-          placeholder={priv?.muted && channel === 'public' ? 'The umpire has muted you' : channel === 'public' ? 'Message the stadium' : 'Message privately'}
-          disabled={priv?.muted && channel === 'public'} />
+          placeholder={priv?.muted && channel === 'public' ? "You've been muted" : watchOnly && channel === 'public' ? 'Spectators watch only in this match' : channel === 'public' ? 'Message the stadium' : 'Message privately'}
+          disabled={(priv?.muted || watchOnly) && channel === 'public'} />
         <button className="btn-go px-4 py-2.5" disabled={!text.trim()}>Send</button>
       </form>
     </section>
@@ -104,12 +105,12 @@ function Message({ m, me, state, isUmp }) {
   return (
     <div className={`group flex flex-col ${mineMsg ? 'items-end' : 'items-start'}`}>
       <div className="flex items-baseline gap-2 px-1 text-xs text-chalk-faint">
-        <span className="font-semibold text-chalk-dim">{m.name}{m.userId === state.umpire.id ? ' (umpire)' : ''}</span>
+        <span className="font-semibold text-chalk-dim">{m.name}{state.umpire && m.userId === state.umpire.id ? ' (umpire)' : ''}{m.userId === state.captains.A || m.userId === state.captains.B ? ' (c)' : ''}</span>
         <time>{time(m.at)}</time>
       </div>
       <div className="relative flex max-w-[85%] items-center gap-1">
         <div className={`rounded-2xl px-3 py-2 text-[15px] ${mineMsg ? 'rounded-br-sm bg-turf text-pitch-900' : 'rounded-bl-sm bg-pitch-600'} ${m.deleted ? 'italic opacity-60' : ''}`}>
-          {m.deleted ? 'Removed by the umpire' : m.text}
+          {m.deleted ? 'Removed by a moderator' : m.text}
         </div>
         {!m.deleted && (
           <span className="flex shrink-0 opacity-60 transition group-hover:opacity-100">

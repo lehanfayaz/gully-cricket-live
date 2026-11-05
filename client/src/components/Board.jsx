@@ -1,4 +1,5 @@
 // Broadcast-style score bug, the six-ball over strip, commentary and full scorecards.
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 export function ScoreBug({ state, online }) {
@@ -60,23 +61,40 @@ function Online({ n }) {
   return <span className="whitespace-nowrap text-xs text-chalk-dim"><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-turf align-middle" />{n} watching</span>;
 }
 
-// The six leather balls of the current over. Each one flips to show the outcome as it's played.
+// The six leather balls of the over. When both sixes are locked in, they flip over one by one.
+export const REVEAL_STEP = 520; // ms between balls in the reveal
 export function OverStrip({ set, compact }) {
-  const slots = Array.from({ length: 6 }, (_, i) => i);
-  const played = new Map((set?.balls || []).filter((b) => !b.voided).map((b) => [b.i, b]));
+  const prev = useRef(null);
+  const [shown, setShown] = useState(99);
+  const played = (set?.balls || []).filter((b) => !b.voided);
+  useEffect(() => {
+    const p = prev.current;
+    prev.current = set ? { id: set.id, status: set.status } : null;
+    // Just revealed: flip the balls in sequence.
+    if (p && set && p.id === set.id && p.status === 'open' && set.status !== 'open') {
+      setShown(0);
+      let k = 0;
+      const t = setInterval(() => { k += 1; setShown(k); if (k >= played.length) clearInterval(t); }, REVEAL_STEP);
+      return () => clearInterval(t);
+    }
+    setShown(99);
+  }, [set?.id, set?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  const byIndex = new Map(played.map((b) => [b.i, b]));
+  const order = played.map((b) => b.i);
   const closed = set && set.status !== 'open';
+  const revealing = shown < played.length;
   return (
     <div>
       <div className={`grid grid-cols-6 ${compact ? 'gap-2' : 'gap-2.5 sm:gap-4'}`}>
-        {slots.map((i) => {
-          const b = played.get(i);
-          const beyondCap = set && i >= set.cap;
-          const dead = beyondCap || (closed && !b);
+        {Array.from({ length: 6 }, (_, i) => {
+          const b = byIndex.get(i);
+          const visible = b && order.indexOf(i) < shown;
+          const dead = set && (i >= set.cap || (closed && !b && !revealing));
           const label = b ? (b.wicket ? 'W' : b.runs) : '';
           return (
             <div key={i} className="flex flex-col items-center gap-1">
-              <div className={`ball ${b ? 'flipped' : ''} ${!set || (!b && !dead && set.status !== 'open') ? 'empty' : ''} ${dead ? 'dead' : ''}`}
-                aria-label={b ? `Ball ${i + 1}: ${b.wicket ? 'wicket' : `${b.runs} runs`}` : `Ball ${i + 1}: ${dead ? 'not played' : 'to come'}`}>
+              <div className={`ball ${visible ? 'flipped' : ''} ${!set ? 'empty' : ''} ${dead && !revealing ? 'dead' : ''}`}
+                aria-label={visible ? `Ball ${i + 1}: ${b.wicket ? 'out' : `${b.runs} runs`}` : `Ball ${i + 1}`}>
                 <div className="ball-inner">
                   <div className="ball-face" />
                   <div className={`ball-back font-display font-extrabold ${compact ? 'text-xl' : 'text-3xl'} ${b?.wicket ? 'is-wicket' : b && b.runs >= 4 ? 'is-boundary' : ''}`}>{label}</div>
@@ -84,7 +102,7 @@ export function OverStrip({ set, compact }) {
               </div>
               {!compact && (
                 <div className="h-4 text-xs tabular-nums text-chalk-dim">
-                  {b ? `${b.bat} v ${b.bowl}` : set?.reveal?.seq ? <span className="text-chalk-faint">bowl {set.reveal.seq[i]}</span> : ''}
+                  {visible ? `${b.bat} v ${b.bowl}` : closed && !revealing && set.reveal?.seq && i < set.cap ? <span className="text-chalk-faint">{set.reveal.batSeq?.[i] ?? '-'} v {set.reveal.seq[i]}</span> : ''}
                 </div>
               )}
             </div>
@@ -93,9 +111,9 @@ export function OverStrip({ set, compact }) {
       </div>
       {set && !compact && (
         <p className="mt-1 text-center text-xs text-chalk-faint">
-          {closed && set.reveal?.salt
-            ? <>Sequence {set.reveal.seq} revealed. Fingerprint {set.hash.slice(0, 10)} checks out with salt {set.reveal.salt.slice(0, 6)}.</>
-            : <>🔒 Sealed by the bowler. Fingerprint {set.hash.slice(0, 10)}</>}
+          {closed && set.reveal?.seq
+            ? <>Batter {set.reveal.batSeq || '-'}, bowler {set.reveal.seq}. Numbers under each ball read batter v bowler.</>
+            : set.status === 'open' ? <>🔒 Both sixes stay sealed until both players lock in.</> : null}
         </p>
       )}
     </div>

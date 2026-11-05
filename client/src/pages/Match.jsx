@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { emit, getSocket } from '../api.js';
 import { SignInCard, useApp } from '../App.jsx';
-import { Commentary, OverStrip, ScoreBug, Scorecards } from '../components/Board.jsx';
-import { BatPanel, BowlPanel, InningsBreak, Lobby, MySealedOver, ResultCard, Waiting } from '../components/Panels.jsx';
+import { Commentary, OverStrip, REVEAL_STEP, ScoreBug, Scorecards } from '../components/Board.jsx';
+import { InningsBreak, Lobby, ResultCard, Waiting } from '../components/Panels.jsx';
+import { OverStatus, SubmitOver } from '../components/OverPanel.jsx';
+import { Lineups } from '../components/Lineups.jsx';
 import Chat from '../components/Chat.jsx';
 import UmpirePanel from '../components/Umpire.jsx';
 import { Cheers, FxOverlay } from '../components/Fx.jsx';
@@ -32,6 +34,7 @@ function Live({ id, me }) {
   const [connected, setConnected] = useState(true);
   const [alerts, setAlerts] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
   const fxTimer = useRef();
+  const revealEnd = useRef(0);
 
   useEffect(() => {
     const s = getSocket();
@@ -45,18 +48,30 @@ function Live({ id, me }) {
     const onChat = (m) => setMessages((list) => (list.some((x) => x.id === m.id) ? list : [...list, m].slice(-400)));
     const onUpdate = (m) => setMessages((list) => list.map((x) => (x.id === m.id ? m : x)));
     const onPresence = (p) => p.matchId === id && setOnline(p.online);
+    // Big moments wait until the over's balls have finished flipping.
+    const show = (f, at) => {
+      setTimeout(() => {
+        clearTimeout(fxTimer.current);
+        setFx({ ...f, key: Math.random() });
+        fxTimer.current = setTimeout(() => setFx(null), f.type === 'result' ? 2600 : 1800);
+      }, Math.max(0, at - Date.now()));
+    };
     const onFx = (f) => {
-      if (f.type === 'runs') return;
-      clearTimeout(fxTimer.current);
-      setFx({ ...f, key: Math.random() });
-      fxTimer.current = setTimeout(() => setFx(null), f.type === 'result' ? 2600 : 1800);
+      if (f.type === 'reveal') {
+        const end = Date.now() + f.balls.length * REVEAL_STEP + 350;
+        revealEnd.current = end;
+        const pick = f.wicket ? 'wicket' : f.balls.some((b) => b.runs === 6) ? 'six' : f.balls.some((b) => b.runs === 4) ? 'four' : null;
+        if (pick) show({ type: pick, batter: f.batter }, end);
+        return;
+      }
+      show(f, Math.max(Date.now(), revealEnd.current + (f.type === 'result' || f.type === 'tie' ? 1900 : 0)));
     };
     const onCheer = (c) => {
       const key = Math.random();
       setCheers((x) => [...x.slice(-24), { ...c, key, x: 8 + Math.random() * 84 }]);
       setTimeout(() => setCheers((x) => x.filter((y) => y.key !== key)), 2300);
     };
-    const onKicked = (k) => { if (k.matchId === id) { toast({ title: 'Removed from match', body: 'The umpire removed you from this match.' }); nav('/'); } };
+    const onKicked = (k) => { if (k.matchId === id) { toast({ title: 'Removed from match', body: 'You were removed from this match.' }); nav('/'); } };
     const onConnect = () => { setConnected(true); open(); };
     const onDisconnect = () => setConnected(false);
     s.on('connect', onConnect); s.on('disconnect', onDisconnect);
@@ -71,8 +86,8 @@ function Live({ id, me }) {
   }, [id, nav, toast]);
 
   const cur = state?.current;
-  const myTurn = !!cur && state.status === 'live' && !state.paused &&
-    ((cur.phase === 'awaiting_sequence' && cur.bowlerId === me) || (cur.phase === 'awaiting_shot' && cur.set?.batterId === me));
+  const role = overRole(state, me);
+  const myTurn = !!role && !priv.myLocked;
   useEffect(() => {
     document.title = myTurn ? '🏏 Your turn! FOOTY CRICKET LEAGUE' : state ? `${state.name}: FOOTY CRICKET LEAGUE` : 'FOOTY CRICKET LEAGUE';
   }, [myTurn, state?.name]);
@@ -89,7 +104,8 @@ function Live({ id, me }) {
   if (!state) return <div className="grid min-h-[60dvh] place-items-center font-display text-2xl text-chalk-dim">Walking out to the middle…</div>;
 
   const isUmp = !!priv.isUmpire;
-  const tabs = [['play', 'Play'], ['card', 'Scorecard'], ['chat', 'Chat'], ...(isUmp ? [['ump', 'Umpire']] : [])];
+  const tabs = [['play', 'Play'], ['lineups', 'Lineups'], ['card', 'Score'], ['chat', 'Chat'],
+    ...(isUmp ? [['ump', 'Umpire']] : priv.isHost ? [['ump', 'Host']] : [])];
 
   return (
     <div className="flex min-h-dvh flex-col pb-16 lg:pb-0">
@@ -115,9 +131,10 @@ function Live({ id, me }) {
             ))}
           </nav>
           <div className="space-y-3 p-3 lg:p-0 lg:pt-3">
-            {tab === 'play' && <PlayTab state={state} priv={priv} me={me} isUmp={isUmp} online={online} />}
+            {tab === 'play' && <PlayTab state={state} priv={priv} me={me} isUmp={isUmp} online={online} openLineups={() => setTab('lineups')} />}
+            {tab === 'lineups' && <Lineups state={state} priv={priv} me={me} />}
             {tab === 'card' && <Scorecards state={state} />}
-            {tab === 'ump' && isUmp && <UmpirePanel state={state} priv={priv} me={me} online={online} />}
+            {tab === 'ump' && (isUmp || priv.isHost) && <UmpirePanel state={state} priv={priv} />}
             {tab === 'chat' && <Chat className="h-[calc(100dvh-15rem)] lg:hidden" state={state} me={me} priv={priv} messages={messages} />}
           </div>
         </div>
@@ -132,7 +149,7 @@ function Live({ id, me }) {
         style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }} role="tablist">
         {tabs.map(([k, label]) => (
           <button key={k} role="tab" aria-selected={tab === k} onClick={() => setTab(k)}
-            className={`relative py-3 font-display text-lg font-bold ${tab === k ? 'text-flood' : 'text-chalk-dim'}`}>
+            className={`relative py-3 font-display text-base font-bold sm:text-lg ${tab === k ? 'text-flood' : 'text-chalk-dim'}`}>
             {label}
             {k === 'play' && myTurn && tab !== 'play' && <span className="absolute right-4 top-2 h-2.5 w-2.5 rounded-full bg-leather" />}
             {tab === k && <span className="absolute inset-x-6 top-0 h-0.5 bg-flood" />}
@@ -146,38 +163,45 @@ function Live({ id, me }) {
   );
 }
 
-function PlayTab({ state, priv, me, isUmp, online }) {
+// Is it this user's over to submit right now? Returns 'bowl', 'bat' or null.
+function overRole(state, me) {
+  const cur = state?.current;
+  if (!cur || state.status !== 'live' || state.paused) return null;
+  const bowler = cur.open ? cur.set.bowlerId : cur.bowlerId;
+  const batter = cur.open ? cur.set.batterId : cur.strikerId;
+  return me === bowler ? 'bowl' : me === batter ? 'bat' : null;
+}
+
+function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
   const cur = state.current;
-  if (state.status === 'lobby') return <Lobby state={state} me={me} isUmp={isUmp} online={online} />;
+  if (state.status === 'lobby') return <Lobby state={state} me={me} priv={priv} online={online} openLineups={openLineups} />;
   if (state.status === 'completed' || state.status === 'abandoned') {
     return <><ResultCard state={state} /><Scorecards state={state} /></>;
   }
-  const strip = (
-    <section className="panel mown p-4">
-      <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="font-display text-xl font-bold">{cur?.open ? 'This over' : 'Last over'}</h2>
-        <span className="text-sm text-chalk-dim">Run rate {cur?.runRate}</span>
-      </div>
-      <div className="mx-auto max-w-lg"><OverStrip set={cur?.set} /></div>
-    </section>
-  );
+  const role = overRole(state, me);
+  const inn = state.innings[state.innings.length - 1];
+  const captainHere = priv.captainOf?.includes(inn?.bowling) || priv.captainOf?.includes(inn?.batting);
   let panel = null;
   if (state.status === 'innings_break') panel = <InningsBreak state={state} isUmp={isUmp} />;
   else if (cur.phase === 'paused') panel = <Waiting title="Play is paused" body="The umpire will resume the match shortly." />;
-  else if (cur.phase === 'awaiting_sequence') {
-    panel = cur.bowlerId === me
-      ? <BowlPanel matchId={state.id} nextBatter={cur.strikerName} />
-      : <Waiting title={`${cur.bowlerName} is sealing the over`}
-          body={cur.strikerId === me ? "You're on strike next. Get ready to pick." : `${cur.strikerName} is waiting on strike.`} />;
-  } else if (cur.phase === 'awaiting_shot') {
-    if (cur.set?.batterId === me) panel = <BatPanel matchId={state.id} cur={cur} />;
-    else if (priv.mySequence) panel = <MySealedOver seq={priv.mySequence} set={cur.set} />;
-    else panel = <Waiting title={`${cur.strikerName} is picking a number`} body={`Ball ${(cur.set?.balls.filter((b) => !b.voided).length || 0) + 1} of the over against ${cur.bowlerName}.`} />;
-  }
+  else if (role) panel = <SubmitOver key={`${cur.number}-${cur.set?.id}-${cur.open}`} state={state} role={role} cur={cur} priv={priv} />;
+  else panel = <OverStatus cur={cur} me={me} />;
   return (
     <>
-      {strip}
+      <section className="panel mown p-4">
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 className="font-display text-xl font-bold">{cur?.open ? 'This over' : 'Last over'}</h2>
+          <span className="text-sm text-chalk-dim">Run rate {cur?.runRate}</span>
+        </div>
+        <div className="mx-auto max-w-lg"><OverStrip set={cur?.set} /></div>
+      </section>
       {panel}
+      {captainHere && state.status === 'live' && !cur.open && (
+        <button onClick={openLineups} className="panel flex w-full items-center justify-between p-3 text-left text-sm hover:bg-pitch-700">
+          <span>You're captain. Change who bowls or bats next before this over starts.</span>
+          <span className="font-semibold text-flood">Lineups</span>
+        </button>
+      )}
       <section className="panel p-4">
         <h2 className="mb-2 font-display text-xl font-bold">Ball by ball</h2>
         <Commentary items={state.commentary} />

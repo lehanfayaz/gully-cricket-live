@@ -87,6 +87,46 @@ function Choice({ selected, onClick, title, body }) {
   );
 }
 
+const AI_LEVEL_NOTE = {
+  easy: 'Picks at random within the rules. Good for learning.',
+  medium: 'Spots your favourite numbers and avoids obvious mistakes.',
+  hard: 'Reads your recent habits, what you pick after what, and the match situation.',
+  expert: 'Tests several theories about how you play and trusts whichever has been right. Plans its overs and plays the situation.',
+};
+const AI_PERSONALITY_NOTE = {
+  strategic: 'Balanced. Weighs every decision on the match situation.',
+  aggressive: 'Swings for big numbers and hunts wickets. Takes risks.',
+  defensive: 'Protects its wicket and bowls tight. Hard to get out.',
+  unpredictable: 'Mixes it up on purpose so you can’t read it.',
+};
+// Difficulty and personality are set independently.
+function AIPicker({ level, personality, setLevel, setPersonality }) {
+  return (
+    <div className="space-y-3">
+      <div>
+        <span className="label">AI difficulty</span>
+        <div className="grid grid-cols-4 gap-2">
+          {['easy', 'medium', 'hard', 'expert'].map((l) => (
+            <button key={l} type="button" aria-pressed={level === l} onClick={() => setLevel(l)}
+              className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${level === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
+          ))}
+        </div>
+        <p className="mt-1 text-xs text-chalk-faint">{AI_LEVEL_NOTE[level]}</p>
+      </div>
+      <div>
+        <span className="label">AI personality</span>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {['strategic', 'aggressive', 'defensive', 'unpredictable'].map((p) => (
+            <button key={p} type="button" aria-pressed={personality === p} onClick={() => setPersonality(p)}
+              className={`rounded-lg py-2 text-sm font-semibold capitalize ${personality === p ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{p}</button>
+          ))}
+        </div>
+        <p className="mt-1 text-xs text-chalk-faint">{AI_PERSONALITY_NOTE[personality]}</p>
+      </div>
+    </div>
+  );
+}
+
 function CreateMatch() {
   const nav = useNavigate();
   const [step, setStep] = useState(0);
@@ -94,7 +134,7 @@ function CreateMatch() {
     name: '', format: 'custom', overs: 2, wickets: 3, playersPerTeam: 11, mode: 'auto', play: 'over', superOver: true,
     noConsecutive: true, spectators: 'open', teamA: 'Lions', teamB: 'Tigers', copyFrom: '',
     days: 3, sessionsPerDay: 3, oversPerSession: 15, inningsPerTeam: 2, sessionMinutes: 0, lunch: true, tea: true, stumps: true, followOn: true,
-    participation: 'ai', teamSource: 'real', aiLevel: 'medium', xiSize: 11, allowSameTeam: false, realA: 'int-ind', realB: 'int-aus',
+    participation: 'ai', teamSource: 'real', aiLevel: 'medium', aiPersonality: 'strategic', xiSize: 11, allowSameTeam: false, realA: 'int-ind', realB: 'int-aus',
   });
   const [past, setPast] = useState([]);
   const [teams, setTeams] = useState(null);
@@ -115,14 +155,14 @@ function CreateMatch() {
     try {
       const { format, overs, wickets, playersPerTeam, mode, play, superOver, noConsecutive, spectators,
         days, sessionsPerDay, oversPerSession, inningsPerTeam, sessionMinutes, lunch, tea, stumps, followOn,
-        participation, teamSource, aiLevel, xiSize, allowSameTeam } = f;
+        participation, teamSource, aiLevel, aiPersonality, xiSize, allowSameTeam } = f;
       const names = real ? [tA?.name, tB?.name] : [f.teamA, f.teamB];
       const r = await api('/api/matches', { body: {
         name: f.name || `${names[0]} v ${names[1]}`, teamA: f.teamA, teamB: f.teamB, copyFrom: (!oneVOne && f.copyFrom) || undefined,
         realTeams: real ? { A: f.realA, B: f.realB } : undefined,
         config: { format, overs, wickets, playersPerTeam, mode, play, superOver, noConsecutive, spectators,
           days, sessionsPerDay, oversPerSession, inningsPerTeam, sessionMinutes, lunch, tea, stumps, followOn,
-          participation, teamSource: oneVOne ? teamSource : 'custom', aiLevel, xiSize, allowSameTeam } } });
+          participation, teamSource: oneVOne ? teamSource : 'custom', aiLevel, aiPersonality, xiSize, allowSameTeam } } });
       nav(`/m/${r.id}`);
     } catch (x) { setErr(x.message); setBusy(false); }
   };
@@ -165,18 +205,7 @@ function CreateMatch() {
               <SyncNote data={teams} />
             </>
           ) : <p className="text-chalk-dim">Loading teams…</p>)}
-          {f.participation === 'ai' && (
-            <div>
-              <span className="label">AI difficulty</span>
-              <div className="grid grid-cols-4 gap-2">
-                {['easy', 'medium', 'hard', 'expert'].map((l) => (
-                  <button key={l} type="button" aria-pressed={f.aiLevel === l} onClick={() => set('aiLevel')(l)}
-                    className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${f.aiLevel === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
-                ))}
-              </div>
-              <p className="mt-1 text-xs text-chalk-faint">{{ easy: 'Picks at random within the rules.', medium: 'Avoids obvious mistakes.', hard: 'Learns your habits and reads the match situation.', expert: 'Learns your patterns, plays the situation, stays hard to read.' }[f.aiLevel]}</p>
-            </div>
-          )}
+          {f.participation === 'ai' && <AIPicker level={f.aiLevel} personality={f.aiPersonality} setLevel={set('aiLevel')} setPersonality={set('aiPersonality')} />}
           {real && tA && tB && (
             <div className="flex items-center justify-center gap-3 rounded-xl bg-pitch-900/60 p-3">
               <TeamBadge team={tA} size={40} /><span className="font-display text-xl font-bold">{tA.name}</span>
@@ -274,7 +303,7 @@ function CreateMatch() {
 
         {step === 3 && real && tA && tB && <>
           <div className="grid grid-cols-2 gap-3">
-            {[[tA, 'You'], [tB, f.participation === 'ai' ? `AI (${f.aiLevel})` : 'Your friend']].map(([t, who]) => (
+            {[[tA, 'You'], [tB, f.participation === 'ai' ? `AI (${f.aiLevel}, ${f.aiPersonality})` : 'Your friend']].map(([t, who]) => (
               <div key={who} className="rounded-xl bg-pitch-900/60 p-3 text-center">
                 <TeamBadge team={t} size={48} className="mx-auto" />
                 <div className="mt-1 font-display text-xl font-bold">{t.name}</div>
@@ -331,7 +360,7 @@ function QuickMatch() {
   const nav = useNavigate();
   const [teams, setTeams] = useState(null);
   const [pick, setPick] = useState(null);
-  const [f, setF] = useState({ real: true, mine: 'int-ind', theirs: 'int-aus', myName: 'My XI', level: 'medium', overs: 3, days: 1, oversPerSession: 10, play: 'over', start: 'toss' });
+  const [f, setF] = useState({ real: true, mine: 'int-ind', theirs: 'int-aus', myName: 'My XI', level: 'medium', personality: 'strategic', overs: 3, days: 1, oversPerSession: 10, play: 'over', start: 'toss' });
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => { api('/api/cricket/teams').then(setTeams).catch(() => setTeams(null)); }, []);
@@ -342,7 +371,7 @@ function QuickMatch() {
     const overs = preset.id === 'custom' ? Number(f.overs) : preset.overs;
     const config = {
       format: preset.format || 'custom', overs, wickets: preset.id === 'custom' ? Math.min(10, Math.max(1, Math.ceil(overs))) : preset.wickets,
-      play: f.play, aiLevel: f.level, teamSource: f.real ? 'real' : 'custom',
+      play: f.play, aiLevel: f.level, aiPersonality: f.personality, teamSource: f.real ? 'real' : 'custom',
       ...(preset.format === 'test' ? { days: Number(f.days), sessionsPerDay: 2, oversPerSession: Number(f.oversPerSession), inningsPerTeam: 2 } : {}),
     };
     try {
@@ -381,15 +410,7 @@ function QuickMatch() {
               <TeamPicker data={teams} value={f.theirs} onChange={set('theirs')} exclude={f.mine} label="AI opponent" />
             </>
           ) : !f.real && <div><label className="label" htmlFor="qn">Team name</label><input id="qn" className="field" value={f.myName} onChange={set('myName')} maxLength={30} /></div>}
-          <div>
-            <span className="label">AI difficulty</span>
-            <div className="grid grid-cols-4 gap-2">
-              {['easy', 'medium', 'hard', 'expert'].map((l) => (
-                <button key={l} type="button" aria-pressed={f.level === l} onClick={() => set('level')(l)}
-                  className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${f.level === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
-              ))}
-            </div>
-          </div>
+          <AIPicker level={f.level} personality={f.personality} setLevel={set('level')} setPersonality={set('personality')} />
           <div className="grid grid-cols-2 gap-3">
             <div>
               <span className="label">How you submit</span>

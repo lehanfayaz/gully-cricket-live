@@ -6,6 +6,7 @@
 import crypto from 'node:crypto';
 import { get, all, run, tx } from './db.js';
 import { checkDigits, isDotOver, isTest } from './rules.js';
+import { selectXI } from './aibrain.js';
 import { getTeam } from './cricketdb.js';
 
 export class GameError extends Error {}
@@ -28,6 +29,7 @@ export const DEFAULT_CONFIG = {
   participation: 'team',
   teamSource: 'custom',     // 'custom' | 'real' (international/IPL teams; 1v1 only)
   aiLevel: 'medium',        // easy | medium | hard | expert
+  aiPersonality: 'strategic', // strategic | aggressive | defensive | unpredictable (independent of level)
   xiSize: 11,               // players picked from a real squad
   allowSameTeam: false,
   quick: false,             // created from Quick Match (labels only; same engine)
@@ -58,6 +60,7 @@ export function sanitizeConfig(input = {}, base = DEFAULT_CONFIG) {
   for (const k of ['lunch', 'tea', 'stumps', 'followOn', 'allowSameTeam', 'quick']) if (k in input) c[k] = !!input[k];
   if (['team', 'pvp', 'ai'].includes(input.participation)) c.participation = input.participation;
   if (['easy', 'medium', 'hard', 'expert'].includes(input.aiLevel)) c.aiLevel = input.aiLevel;
+  if (['strategic', 'aggressive', 'defensive', 'unpredictable'].includes(input.aiPersonality)) c.aiPersonality = input.aiPersonality;
   c.teamSource = input.teamSource === 'real' && c.participation !== 'team' ? 'real' : 'custom';
   c.xiSize = int(input.xiSize, 2, 11, c.xiSize);
   if (c.participation !== 'team') c.playersPerTeam = c.teamSource === 'real' ? c.xiSize : 1; // 1v1
@@ -246,8 +249,10 @@ function addController(matchId, team, userId) {
 
 function createBot(cfg, label) {
   const id = crypto.randomUUID();
-  const level = cfg.aiLevel[0].toUpperCase() + cfg.aiLevel.slice(1);
-  run('INSERT INTO users (id, display_name, is_guest, is_bot, created_at) VALUES (?,?,1,1,?)', id, `${label} AI (${level})`.slice(0, 40), now());
+  const cap = (x) => x[0].toUpperCase() + x.slice(1);
+  const pers = cfg.aiPersonality || 'strategic';
+  const name = pers === 'strategic' ? `${label} AI (${cap(cfg.aiLevel)})` : `${label} AI (${cap(cfg.aiLevel)}, ${cap(pers)})`;
+  run('INSERT INTO users (id, display_name, is_guest, is_bot, created_at) VALUES (?,?,1,1,?)', id, name.slice(0, 40), now());
   return id;
 }
 
@@ -259,7 +264,9 @@ function setupOneVOne(matchId, userId, cfg, realA, realB) {
     run('INSERT INTO team_selections (match_id, side, team_id, team_name, user_id, created_at) VALUES (?,?,?,?,?,?)', matchId, 'A', realA.id, realA.name, userId, now());
     run('INSERT INTO team_selections (match_id, side, team_id, team_name, user_id, created_at) VALUES (?,?,?,?,?,?)', matchId, 'B', realB.id, realB.name, userId, now());
     setXI(matchId, 'A', defaultXI(squadFor(metaA, cfg.xiSize), cfg.xiSize), null);
-    setXI(matchId, 'B', defaultXI(squadFor(metaB, cfg.xiSize), cfg.xiSize), null);
+    // The AI picks its own XI for the format and its personality; a human side starts from the default XI.
+    const squadB = squadFor(metaB, cfg.xiSize);
+    setXI(matchId, 'B', cfg.participation === 'ai' ? selectXI(squadB, cfg.xiSize, cfg.format, cfg.aiPersonality) : defaultXI(squadB, cfg.xiSize), null);
     if (human) addController(matchId, 'A', userId);
     if (cfg.participation === 'ai') addController(matchId, 'B', createBot(cfg, realB.short || realB.name));
   } else {
@@ -1439,7 +1446,7 @@ export function publicState(matchId) {
       strikerName: userName(inn.striker_id), bowlerName: userName(inn.bowler_id),
       set: last ? setView(last) : null, open: !!open,
       // How many numbers the next submission needs: the balls left in this over, or one at a time.
-      cap: open ? open.cap - open.used : m.config.play === 'ball' ? 1 : inOver,
+      cap: open ? open.cap - open.used : inn.status === 'live' ? capFor(m, inn) : m.config.play === 'ball' ? 1 : inOver,
       lastOverBowler: lastOverBowler(inn.id), strikerFresh: inn.status === 'live' ? strikerFresh(inn) : false,
       runRate: rr.toFixed(2), need, ballsLeft: left,
       requiredRate: need != null && left > 0 ? ((need * 6) / left).toFixed(2) : null,
@@ -1509,6 +1516,7 @@ export function publicState(matchId) {
     id: m.id, name: m.name, status: m.status, stage, paused: !!m.paused, config: m.config, tossBat: m.toss_bat,
     mode: m.config.mode, play: m.config.play, format: m.config.format, test,
     participation: m.config.participation, teamSource: m.config.teamSource, aiLevel: m.config.participation === 'ai' ? m.config.aiLevel : null,
+    aiPersonality: m.config.participation === 'ai' ? m.config.aiPersonality || 'strategic' : null,
     teamMeta: { A: m.team_a_meta ? JSON.parse(m.team_a_meta) : null, B: m.team_b_meta ? JSON.parse(m.team_b_meta) : null },
     lineups: { A: { confirmedAt: m.confirm_a || null }, B: { confirmedAt: m.confirm_b || null } },
     toss: { caller: m.toss_caller, call: m.toss_call, result: m.toss_result, winner: m.toss_winner, decision: m.toss_decision, at: m.toss_at },

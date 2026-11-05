@@ -9,7 +9,8 @@ A reference for anyone changing the game. It describes the code as it is, where 
 | Web server, real-time | `server/index.js` | Express REST API, Socket.IO events, auth, admin endpoints, AI scheduling, broadcasting state |
 | Rules engine | `server/engine.js` | Every match action: creation, lineups, toss, submissions, reveal, innings, sessions, suspension, results, chat. Clients only send intents. |
 | Digit rules | `server/rules.js` | Which numbers each role may pick per format, and the bowler repetition rule. Mirrored in `client/src/rules.js` only to grey out buttons. |
-| AI player | `server/ai.js` | Chooses numbers from public information only, then calls the same engine functions as a person |
+| AI player | `server/ai.js` | Reads public state and revealed balls only, then acts through the same engine functions as a person |
+| AI decisions | `server/aibrain.js` | Pure decision functions (no database or engine access): opponent models, difficulty, personality, situation, captaincy |
 | Database | `server/db.js` | SQLite (Node's built-in `node:sqlite`), schema and in-place upgrades |
 | Cricket data | `server/cricketdb.js`, `server/sync.js`, `server/providers/cricketdata.js` | Teams, squads and the daily sync |
 | Stats | `server/stats.js` | Profiles, records and leaderboards from the ball records |
@@ -39,6 +40,29 @@ Every engine action runs inside one SQLite transaction (`tx` in `db.js`, `BEGIN 
 | Sessions | `capFor` keeps a submission within the session; `sessionCheck` ends it after its overs; `endSession` records a summary and pauses (or rolls on if that break is switched off). Innings are independent of sessions. |
 | Suspend / resume | `testAction` `suspend` saves `status_before` in `suspensions`; `resume` restores exactly that status. Nothing advances automatically. Open submissions and requirements stay in the database. |
 
+## AI opponent
+
+Difficulty (`aiLevel`) and personality (`aiPersonality`) are separate settings, chosen in the match wizard and in Quick Match, and shown in the AI's name.
+
+**What it may see.** `ai.js` reads `publicState` and the `balls` table, which only holds balls that have been revealed. It never reads the `sets` table, so it never sees a submission that is still hidden. `aibrain.js` has no database access at all: it works only on what it is handed. Expert also reads the human's revealed balls from their earlier matches. The AI always submits through `submitOver`, with the same validation as a person.
+
+**Difficulty**, by how it reads the opponent:
+
+| Level | Opponent model | Uses the repetition rule | Reads the situation | Randomness |
+|---|---|---|---|---|
+| Easy | None (uniform) | No | No | High |
+| Medium | Overall frequency, half-trusted | Yes (digits the bowler can't use are safe) | Half | Medium |
+| Hard | Recency + what follows their last pick + habits by ball position | Yes | Fully | Low; plans its one triple, avoids needless dot overs |
+| Expert | Seven predictors scored on how well each has predicted this opponent's recent picks, trusting whichever has been right | Yes | Fully | Lowest |
+
+**Personality** shifts the trade-offs: Aggressive (cheaper wickets, bigger numbers, hunts wickets, bats first, picks an extra batter); Defensive (protects its wicket, bowls tight, picks an extra bowler, declares later); Unpredictable (more randomness and deliberate surprise, may shuffle the batting order); Strategic (balanced, weighs the situation most).
+
+**Situation.** A wicket's cost in runs depends on the chase rate, the overs left per wicket in hand, the last wicket, and in Tests whether a win is still possible.
+
+**Captaincy.** It picks its XI for the format and its personality, sets the batting and bowling orders, chooses the next bowler from this innings' figures (wicket-takers early, economy at the death, never two overs in a row, with the workload spread), and handles the toss, follow-on and declarations.
+
+Each AI action is logged in `ai_decisions`. If the AI ever needed its fallback, that would be logged as `fallback`, and the grid test asserts it never happens.
+
 ## Data integrity
 
 - All scoring is calculated on the server from the stored digits; clients never send runs or wickets.
@@ -56,3 +80,4 @@ Every engine action runs inside one SQLite transaction (`tx` in `db.js`, `BEGIN 
 | `test/testmatch.test.js` | Test digits, sessions, suspend/resume, day changes, dot-over rule (no-umpire and umpire rulings), declarations, follow-on, innings win, draw |
 | `test/rules.test.js` | Every rule example from the specification, in both formats and both play styles, through the real engine, including repetition tracking across a mid-over session break and suspension |
 | `test/ai.test.js` | AI rule compliance (fuzzed), AI never seeing hidden picks, one-v-one and real-team matches, data sync, Quick Match |
+| `test/aigrid.test.js` | Every difficulty × personality played as complete matches (Test, T20, ODI, Quick × complete over and ball by ball, 128 matches) and audited ball by ball; fairness; strength and personality differences; 8,000 fuzzed decisions |

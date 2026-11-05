@@ -22,7 +22,7 @@ A real-time multiplayer number-cricket game that runs in the browser. One person
 | Format | Overs | Batter may pick | Bowler may pick |
 |---|---|---|---|
 | T20 / ODI / Custom (limited overs) | 20 / 50 / your choice | 1–6, any number of times | 1–6, but no number more than 3 times in one over (resets each over) |
-| Test match | Days × sessions × overs per session | 0, 1, 2, 3, 4, 6 (0 = dot ball, no 5) | 1, 2, 3, 4, 6 (no 0 or 5), no repetition limit |
+| Test match | Days × sessions × overs per session | 0, 1, 2, 3, 4, 6 (0 = dot ball, no 5) | 1, 2, 3, 4, 6 (no 0 or 5), no number more than 3 times in one over |
 
 These rules live in `server/rules.js` and are enforced on the server; the pads only show valid buttons.
 

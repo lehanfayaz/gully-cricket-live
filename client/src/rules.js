@@ -2,4 +2,5 @@
 export const digitsFor = (state, role) => (state.format === 'test'
   ? (role === 'bowl' ? [1, 2, 3, 4, 6] : [0, 1, 2, 3, 4, 6])
   : [1, 2, 3, 4, 5, 6]);
-export const repeatLimit = (state, role) => (state.format !== 'test' && role === 'bowl' ? 3 : null);
+// Bowlers can use each number at most 3 times per over, in every format.
+export const repeatLimit = (state, role) => (role === 'bowl' ? 3 : null);

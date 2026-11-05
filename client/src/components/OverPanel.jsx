@@ -49,7 +49,7 @@ export function SubmitOver({ state, role, cur, priv }) {
   const ruleNote = (
     <>
       {state.format === 'test' && (
-        <p className="mt-2 text-xs text-chalk-faint">Test rules: {role === 'bowl' ? 'bowlers pick 1, 2, 3, 4 or 6' : 'batters pick 0, 1, 2, 3, 4 or 6 (0 is a dot ball)'}. No 5.</p>
+        <p className="mt-2 text-xs text-chalk-faint">Test rules: {role === 'bowl' ? 'bowlers pick 1, 2, 3, 4 or 6, each at most 3 times an over' : 'batters pick 0, 1, 2, 3, 4 or 6 (0 is a dot ball)'}. No 5.</p>
       )}
       {limit && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" aria-label="Times each number has been used this over">

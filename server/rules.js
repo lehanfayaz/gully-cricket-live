@@ -11,7 +11,7 @@ export const LIMITED = {
 export const TEST = {
   batter: [0, 1, 2, 3, 4, 6], // 0 is a deliberate dot ball; no 5
   bowler: [1, 2, 3, 4, 6],    // no 0, no 5
-  maxRepeatPerOver: null,     // the limited-overs repetition limit does not apply to Tests
+  maxRepeatPerOver: 3,        // same limit as limited overs: only the available numbers differ
 };
 
 export const isTest = (config) => config.format === 'test';

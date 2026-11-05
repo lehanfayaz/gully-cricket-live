@@ -106,13 +106,23 @@ function tossDecision(format, level, personality, rand) {
 }
 
 // One step for the AI in this match, if it has something to do. Returns a description or null.
+// Acts for every AI side in the match (one against a human, or both in a tournament AI v AI fixture).
 export function aiStep(matchId) {
   const m = G.loadMatch(matchId);
-  if (m.config.participation !== 'ai') return null;
-  const bot = get(`SELECT m.user_id, m.team FROM members m JOIN users u ON u.id = m.user_id WHERE m.match_id = ? AND u.is_bot = 1 AND m.banned = 0`, matchId);
-  if (!bot) return null;
+  if (m.config.participation !== 'ai' && m.config.participation !== 'aivai') return null;
+  const bots = all(`SELECT m.user_id, m.team FROM members m JOIN users u ON u.id = m.user_id WHERE m.match_id = ? AND u.is_bot = 1 AND m.banned = 0 ORDER BY m.team`, matchId);
+  for (const bot of bots) {
+    const r = stepFor(matchId, bot);
+    if (r) return r;
+  }
+  return null;
+}
+
+function stepFor(matchId, bot) {
+  const m = G.loadMatch(matchId);
   const uid = bot.user_id, team = bot.team;
-  const level = m.config.aiLevel, personality = m.config.aiPersonality || 'strategic';
+  const side = m.config.aiSides?.[team];
+  const level = side?.level || m.config.aiLevel, personality = side?.personality || m.config.aiPersonality || 'strategic';
   const strong = level === 'hard' || level === 'expert';
   const state = G.publicState(matchId);
   const human = state.members.find((x) => !x.bot && !x.ghost && x.team && x.team !== team)?.id || null;

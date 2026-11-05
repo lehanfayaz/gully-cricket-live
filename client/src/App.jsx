@@ -7,6 +7,8 @@ import Profile from './pages/Profile.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
 import Admin from './pages/Admin.jsx';
 import MatchStats from './pages/MatchStats.jsx';
+import Tournament from './pages/Tournament.jsx';
+import TournamentNew from './pages/TournamentNew.jsx';
 
 const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
@@ -52,6 +54,8 @@ export default function App() {
             <Route path="/" element={<Home />} />
             <Route path="/m/:id" element={<Match />} />
             <Route path="/m/:id/stats" element={<MatchStats />} />
+            <Route path="/t/new" element={<TournamentNew />} />
+            <Route path="/t/:id" element={<Tournament />} />
             <Route path="/u/:id" element={<Profile />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/admin" element={<Admin />} />

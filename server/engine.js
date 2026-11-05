@@ -37,6 +37,7 @@ export const DEFAULT_CONFIG = {
   wickets: 3,
   playersPerTeam: 11,
   superOver: true,
+  untilWinner: false,        // knockouts: repeat super overs until there's a winner
   noConsecutive: true,       // a bowler can't bowl two overs in a row (when the team has another bowler)
   spectators: 'open',        // 'open' (watch + chat) | 'watch' (watch only)
 };
@@ -66,7 +67,7 @@ export function sanitizeConfig(input = {}, base = DEFAULT_CONFIG) {
   if (c.participation !== 'team') c.playersPerTeam = c.teamSource === 'real' ? c.xiSize : 1; // 1v1
   if (c.participation === 'ai') c.mode = 'auto'; // an umpire would see the bowler's numbers; not needed against the AI
   if (input.spectators === 'open' || input.spectators === 'watch') c.spectators = input.spectators;
-  for (const k of ['superOver', 'noConsecutive']) if (k in input) c[k] = !!input[k];
+  for (const k of ['superOver', 'noConsecutive', 'untilWinner']) if (k in input) c[k] = !!input[k];
   return c;
 }
 
@@ -245,6 +246,46 @@ function addController(matchId, team, userId) {
   else run(`INSERT INTO members (match_id, user_id, team, kind, bowls, joined_at) VALUES (?,?,?, 'controller', 0, ?)`, matchId, userId, team, now());
   run(`UPDATE members SET controller_id = ? WHERE match_id = ? AND team = ? AND kind = 'player'`, userId, matchId, team);
   fixCaptains(matchId);
+}
+
+// ---------- tournament fixtures ----------
+// A tournament match through the normal engine: the human (if playing) is side A; AI sides are bots with their
+// own difficulty and personality. sides: { A: { realId | name, human, level, personality }, B: {...} }.
+export function createTournamentMatch(ownerId, { name, config, sides, tournament }) {
+  const id = newCode();
+  const human = sides.A.human ? 'A' : null;
+  const cfg = sanitizeConfig({ ...config, participation: 'ai', teamSource: sides.A.realId ? 'real' : 'custom', aiLevel: (human ? sides.B : sides.A).level, aiPersonality: (human ? sides.B : sides.A).personality });
+  cfg.participation = human ? 'ai' : 'aivai';
+  cfg.mode = 'auto';
+  cfg.aiSides = Object.fromEntries(['A', 'B'].filter((t) => !sides[t].human).map((t) => [t, { level: sides[t].level, personality: sides[t].personality }]));
+  cfg.tournament = tournament; // { id, fixtureId, label }
+  const real = { A: sides.A.realId ? getTeam(sides.A.realId) : null, B: sides.B.realId ? getTeam(sides.B.realId) : null };
+  if ((sides.A.realId && !real.A) || (sides.B.realId && !real.B)) fail('One of the tournament teams no longer exists in the team database.');
+  tx(() => {
+    const names = { A: (real.A?.name || sides.A.name).slice(0, 30), B: (real.B?.name || sides.B.name).slice(0, 30) };
+    run(`INSERT INTO matches (id, name, umpire_id, config, team_a, team_b, toss_bat, created_at) VALUES (?,?,?,?,?,?,?,?)`,
+      id, String(name).slice(0, 60), ownerId, JSON.stringify(cfg), names.A, names.B, 'A', now());
+    run('INSERT INTO members (match_id, user_id, joined_at) VALUES (?,?,?)', id, ownerId, now());
+    const meta = { A: real.A ? teamMeta(real.A) : { source: 'custom', name: names.A, short: sides.A.short, color: sides.A.color }, B: real.B ? teamMeta(real.B) : { source: 'custom', name: names.B, short: sides.B.short, color: sides.B.color } };
+    run('UPDATE matches SET team_a_meta = ?, team_b_meta = ? WHERE id = ?', JSON.stringify(meta.A), JSON.stringify(meta.B), id);
+    for (const t of ['A', 'B']) {
+      const side = sides[t];
+      const botCfg = { ...cfg, aiLevel: side.level, aiPersonality: side.personality };
+      if (real[t]) {
+        run('INSERT INTO team_selections (match_id, side, team_id, team_name, user_id, created_at) VALUES (?,?,?,?,?,?)', id, t, real[t].id, real[t].name, ownerId, now());
+        const squad = squadFor(meta[t], cfg.xiSize);
+        setXI(id, t, side.human ? defaultXI(squad, cfg.xiSize) : selectXI(squad, cfg.xiSize, cfg.format, side.personality), null);
+        addController(id, t, side.human ? ownerId : createBot(botCfg, real[t].short || real[t].name));
+      } else if (side.human) {
+        run('UPDATE members SET team = ? WHERE match_id = ? AND user_id = ?', t, id, ownerId);
+      } else {
+        run('INSERT INTO members (match_id, user_id, team, joined_at) VALUES (?,?,?,?)', id, createBot(botCfg, sides[t].short || names[t]), t, now());
+      }
+    }
+    fixCaptains(id);
+    announce(id, `${tournament.label}: ${names.A} v ${names.B}.`, null, 'public', 'system');
+  });
+  return id;
 }
 
 function createBot(cfg, label) {
@@ -498,6 +539,7 @@ function overCall(m, inn, ctx, why = '') {
 
 const teamTotal = (matchId, team) =>
   all('SELECT id FROM innings WHERE match_id = ? AND batting = ?', matchId, team).reduce((s, i) => s + totals(i.id).runs, 0);
+const MAX_INNINGS = 22; // ten super overs at most
 const NO_LIMIT = 1_000_000_000; // Test innings have no over limit
 
 function createInnings(m, number, ctx, opts = {}) {
@@ -507,13 +549,15 @@ function createInnings(m, number, ctx, opts = {}) {
   let batting, target = null;
   if (number === 1) batting = m.toss_bat;
   else if (number === 2) batting = other(prev.batting);
-  else if (number === 3) batting = get('SELECT batting FROM innings WHERE match_id = ? AND number = 2', m.id).batting;
+  // Each super over: the side that batted second in the previous pair bats first.
+  else if (number % 2 === 1) batting = prev.batting;
   else batting = other(prev.batting);
-  if (number === 2 || number === 4) target = totals(prev.id).runs + 1;
+  if (number % 2 === 0) target = totals(prev.id).runs + 1;
   const maxBalls = superOver ? 6 : m.config.overs * 6;
   const maxWickets = superOver ? Math.min(2, m.config.wickets) : m.config.wickets;
   insertInnings(m, number, batting, target, maxBalls, maxWickets, superOver, false);
-  const label = superOver ? `Super over (${number === 3 ? 'first' : 'second'} half)` : number === 1 ? 'First innings' : 'Second innings';
+  const soNo = Math.floor((number - 1) / 2);
+  const label = superOver ? `${soNo > 1 ? `Super over ${soNo}` : 'Super over'} (${number % 2 === 1 ? 'first' : 'second'} half)` : number === 1 ? 'First innings' : 'Second innings';
   const inn = latestInnings(m.id);
   announce(m.id, `${label}: ${teamName(m, batting)} bat${target ? `, needing ${target} to win` : ''}. ${userName(inn.striker_id)} faces ${userName(inn.bowler_id)}.`, { type: 'innings', number });
   overCall(m, null, ctx);
@@ -768,18 +812,19 @@ function endInnings(m, inn, ctx, reason = null) {
     announce(m.id, `${msg} Waiting for the umpire to start the next innings.`, { type: 'break' });
     ctx.notify.push({ userId: m.umpire_id, title: 'Innings break', body: 'Start the next innings when everyone is ready.', kind: 'umpire' });
   };
-  if (n === 1 || n === 3) return breakOrNext(`${teamName(m, other(inn.batting))} need ${t.runs + 1} to win.`);
+  if (n % 2 === 1) return breakOrNext(`${teamName(m, other(inn.batting))} need ${t.runs + 1} to win.`);
 
   const first = get('SELECT * FROM innings WHERE match_id = ? AND number = ?', m.id, n - 1);
   const a = totals(first.id);
-  const so = n === 4 ? ' in the super over' : '';
+  const so = n >= 4 ? (n > 4 ? ` in super over ${n / 2 - 1}` : ' in the super over') : '';
   let result;
   if (t.runs >= inn.target) {
     const left = inn.max_wickets - t.wickets;
     result = { winner: inn.batting, tie: false, text: `${teamName(m, inn.batting)} won by ${left} wicket${left === 1 ? '' : 's'}${so}.` };
   } else if (t.runs === inn.target - 1) {
-    if (n === 2 && m.config.superOver) {
-      announce(m.id, `Scores level at ${t.runs}! It's going to a super over.`, { type: 'tie' });
+    // Knockout matches (untilWinner) keep playing super overs until there's a winner, as in the ICC rules.
+    if ((n === 2 && m.config.superOver) || (n >= 4 && m.config.untilWinner && n < MAX_INNINGS)) {
+      announce(m.id, n === 2 ? `Scores level at ${t.runs}! It's going to a super over.` : `Super over tied at ${t.runs}! Another super over.`, { type: 'tie' });
       ctx.fx.push({ type: 'tie' });
       return breakOrNext('Super over time.');
     }
@@ -1234,6 +1279,7 @@ export function umpireAction(userId, matchId, a, ctx) {
       case 'void': {
         // Cancel the last revealed over completely; both players lock in again.
         needUmpire();
+        if (m.config.tournament) fail('Tournament results come only from the deliveries as played.');
         if (!inn) fail('Nothing to correct.');
         if (!(m.status === 'live' || (m.status === 'innings_break' && inn.status === 'done'))) fail('Corrections are only possible during play or the innings break.');
         const set = get(`SELECT * FROM sets WHERE innings_id = ? AND status = 'closed' AND used > 0
@@ -1255,6 +1301,7 @@ export function umpireAction(userId, matchId, a, ctx) {
       }
       case 'adjust': {
         needUmpire();
+        if (m.config.tournament) fail('Scores in tournament matches come only from the deliveries.');
         if (!inn) fail('No innings yet.');
         if (m.status !== 'live' && m.status !== 'innings_break') fail('Adjustments are only possible during the match.');
         const delta = parseInt(a.runs, 10);
@@ -1271,6 +1318,7 @@ export function umpireAction(userId, matchId, a, ctx) {
       }
       case 'end': {
         if (m.config.mode === 'umpire') needUmpire(); else needHost();
+        if (m.config.tournament && a.outcome !== 'abandon') fail('Tournament matches are decided on the field. You can abandon it, which counts as no result.');
         if (m.status === 'completed' || m.status === 'abandoned') fail('This match has finished.');
         if (m.status === 'lobby' && a.outcome !== 'abandon') fail('The match has not started.');
         if (a.outcome === 'draw' && !isTest(m.config)) fail('Only Test matches can be drawn.');
@@ -1516,6 +1564,7 @@ export function publicState(matchId) {
     id: m.id, name: m.name, status: m.status, stage, paused: !!m.paused, config: m.config, tossBat: m.toss_bat,
     mode: m.config.mode, play: m.config.play, format: m.config.format, test,
     participation: m.config.participation, teamSource: m.config.teamSource, aiLevel: m.config.participation === 'ai' ? m.config.aiLevel : null,
+    tournament: m.config.tournament || null,
     aiPersonality: m.config.participation === 'ai' ? m.config.aiPersonality || 'strategic' : null,
     teamMeta: { A: m.team_a_meta ? JSON.parse(m.team_a_meta) : null, B: m.team_b_meta ? JSON.parse(m.team_b_meta) : null },
     lineups: { A: { confirmedAt: m.confirm_a || null }, B: { confirmedAt: m.confirm_b || null } },

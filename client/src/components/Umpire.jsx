@@ -8,7 +8,7 @@ export default function UmpirePanel({ state, priv }) {
   const { toast } = useApp();
   const [reason, setReason] = useState('');
   const [adjust, setAdjust] = useState(1);
-  const [outcome, setOutcome] = useState('A');
+  const [outcome, setOutcome] = useState(state.tournament ? 'abandon' : 'A');
   const [armed, setArmed] = useState(false);
   const cur = state.current;
   const ump = priv.isUmpire;
@@ -74,15 +74,15 @@ export default function UmpirePanel({ state, priv }) {
           <h2 className="font-display text-2xl font-bold">End the match early</h2>
           <div className="flex gap-2">
             <select aria-label="Result" className="field" value={outcome} onChange={(e) => setOutcome(e.target.value)}>
-              <option value="A">{state.teams.A.name} win</option>
-              <option value="B">{state.teams.B.name} win</option>
-              <option value="tie">Declare a tie</option>
+              {!state.tournament && <option value="A">{state.teams.A.name} win</option>}
+              {!state.tournament && <option value="B">{state.teams.B.name} win</option>}
+              {!state.tournament && <option value="tie">Declare a tie</option>}
               {state.format === 'test' && <option value="draw">Declare a draw</option>}
               <option value="abandon">Abandon (no result)</option>
             </select>
             <button className="btn-danger shrink-0" onClick={() => (armed ? act({ type: 'end', outcome, reason }) : setArmed(true))}>{armed ? 'Tap to confirm' : 'End match'}</button>
           </div>
-          <p className="text-xs text-chalk-faint">Matches that finish normally are decided automatically.</p>
+          <p className="text-xs text-chalk-faint">{state.tournament ? 'Tournament matches are decided on the field. Abandoning counts as no result (in a knockout, the higher seed goes through).' : 'Matches that finish normally are decided automatically.'}</p>
         </section>
       )}
     </div>

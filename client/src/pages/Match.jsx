@@ -122,6 +122,12 @@ function Live({ id, me }) {
           {!connected && <span className="rounded-full bg-leather px-2 py-0.5 text-xs font-semibold">Reconnecting…</span>}
         </div>
         <ScoreBug state={state} online={online.length} />
+        {state.tournament && (
+          <Link to={`/t/${state.tournament.id}`} className="flex items-center justify-between gap-2 border-t border-pitch-600 px-4 py-1.5 text-sm hover:bg-pitch-800">
+            <span className="truncate text-chalk-dim">{state.tournament.label}</span>
+            <span className="shrink-0 font-semibold text-flood">{state.status === 'completed' || state.status === 'abandoned' ? 'Back to the tournament' : 'Tournament'}</span>
+          </Link>
+        )}
       </div>
 
       <div className="flex-1 lg:grid lg:grid-cols-[1fr_380px] lg:gap-4 lg:px-4 lg:pt-4">
@@ -180,7 +186,9 @@ function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
   const cur = state.current;
   if (state.status === 'lobby') return <Lobby state={state} me={me} priv={priv} online={online} openLineups={openLineups} />;
   if (state.status === 'completed' || state.status === 'abandoned') {
-    return <><ResultCard state={state} /><AnalysisLink id={state.id} done /><Scorecards state={state} /></>;
+    return <><ResultCard state={state} />
+      {state.tournament && <Link to={`/t/${state.tournament.id}`} className="btn-flood w-full text-xl">Back to {state.tournament.name || 'the tournament'}</Link>}
+      <AnalysisLink id={state.id} done /><Scorecards state={state} /></>;
   }
   const role = overRole(state, me);
   const inn = state.innings[state.innings.length - 1];

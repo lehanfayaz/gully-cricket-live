@@ -10,6 +10,7 @@ A reference for anyone changing the game. It describes the code as it is, where 
 | Rules engine | `server/engine.js` | Every match action: creation, lineups, toss, submissions, reveal, innings, sessions, suspension, results, chat. Clients only send intents. |
 | Digit rules | `server/rules.js` | Which numbers each role may pick per format, and the bowler repetition rule. Mirrored in `client/src/rules.js` only to grey out buttons. |
 | AI player | `server/ai.js` | Reads public state and revealed balls only, then acts through the same engine functions as a person |
+| Tournaments | `server/tournament.js` | Fixtures, standings, net run rate, qualification, bracket, AI v AI play, tournament stats |
 | Statistics and analysis | `server/analytics.js` | Careers, match analysis, ball-by-ball replay and highlights, all derived from the saved deliveries |
 | AI decisions | `server/aibrain.js` | Pure decision functions (no database or engine access): opponent models, difficulty, personality, situation, captaincy |
 | Database | `server/db.js` | SQLite (Node's built-in `node:sqlite`), schema and in-place upgrades |
@@ -40,6 +41,44 @@ Every engine action runs inside one SQLite transaction (`tx` in `db.js`, `BEGIN 
 | Test dot-over rule | `reveal`: after the 6th legal ball of an over, `isDotOver` creates a `dot_rules` row for the next over; balls 1–2 of that over meet, cancel (wicket) or break it. `endTestInnings` cancels open ones. No umpire: out (`dismissal = 'dot_rule'`, not credited to the bowler). Umpire: play held until a ruling. |
 | Sessions | `capFor` keeps a submission within the session; `sessionCheck` ends it after its overs; `endSession` records a summary and pauses (or rolls on if that break is switched off). Innings are independent of sessions. |
 | Suspend / resume | `testAction` `suspend` saves `status_before` in `suspensions`; `resume` restores exactly that status. Nothing advances automatically. Open submissions and requirements stay in the database. |
+
+## Tournaments against the AI
+
+**Formats.**
+- Knockout: byes go to the top seeds when the field isn't a power of two.
+- Round robin: once or home and away, then top wins, a final, or semis.
+- Groups then knockout: snake-seeded groups, with cross-group pairings so teams from one group only meet again in the final.
+- Custom: 0–4 groups, legs, qualifiers per group, and an optional third-place play-off.
+
+All four are built from one structure (`groups`, `legs`, `qualify`, `thirdPlace`).
+
+**Every fixture is a real match.** `createTournamentMatch` creates the match through the engine:
+- The human's team is side A, controlled by the human.
+- Each AI team is a bot with its own difficulty and personality (`config.aiSides`).
+- AI v AI fixtures (`participation: 'aivai'`) are played by `aiStep` for both bots, ball by ball, through the same validation.
+- Knockouts set `untilWinner`, so a tied super over leads to another, as in the ICC rules.
+- Tournament matches can't have a result declared or runs adjusted. They can only be abandoned, which counts as no result; in a knockout the higher seed then goes through.
+
+**Nothing is stored that can drift.** `tournament_fixtures` records which match each fixture is, and its winner. Standings, net run rate and qualification are recomputed from the completed matches on every view (`standings`).
+- Points: 2 for a win, 1 for a tie or no result.
+- Net run rate: a side bowled out counts its full overs; no-result matches are left out.
+- Ties on points are split by NRR.
+- "Qualified" and "Out" are shown only once mathematically certain (on points); otherwise the table shows where a team currently stands.
+
+Knockout places resolve from their sources (group rank, winner or loser of a fixture, or bye) as soon as those are final (`syncIn`).
+
+**Persistence.** Everything is in the database:
+- Leaving and coming back reopens the dashboard exactly as it was.
+- "Resume your match" reopens the human's match where it stopped.
+- An AI match interrupted by a restart carries on from its saved state.
+
+**Endpoints.**
+- `GET /api/tournaments/mine`, `POST /api/tournaments`, `GET /api/tournaments/:id`.
+- `POST /api/tournaments/:id/play`: the human's next match, once earlier fixtures are done.
+- `POST /api/tournaments/:id/simulate`: AI fixtures up to the human's next match, or `{limit: 1}` for one.
+- `POST /api/tournaments/:id/abandon`.
+
+**Pages.** `/t/new` (the wizard) and `/t/:id` (the dashboard: overview, fixtures, table, bracket, teams, stats, and the final's scorecard).
 
 ## Statistics, replay and highlights
 
@@ -96,5 +135,6 @@ Each AI action is logged in `ai_decisions`. If the AI ever needed its fallback, 
 | `test/testmatch.test.js` | Test digits, sessions, suspend/resume, day changes, dot-over rule (no-umpire and umpire rulings), declarations, follow-on, innings win, draw |
 | `test/rules.test.js` | Every rule example from the specification, in both formats and both play styles, through the real engine, including repetition tracking across a mid-over session break and suspension |
 | `test/ai.test.js` | AI rule compliance (fuzzed), AI never seeing hidden picks, one-v-one and real-team matches, data sync, Quick Match |
+| `test/tournament.test.js` | Complete tournaments of every kind from first fixture to champion with no manual edits; tables recomputed independently; byes; repeated super overs; fairness; resuming in a new process |
 | `test/analytics.test.js` | Replay rebuilt into every scorecard (19 matches incl. Tests, real teams, voided overs and umpire adjustments); every career figure recounted directly from the balls table |
 | `test/aigrid.test.js` | Every difficulty × personality played as complete matches (Test, T20, ODI, Quick × complete over and ball by ball, 128 matches) and audited ball by ball; fairness; strength and personality differences; 8,000 fuzzed decisions |

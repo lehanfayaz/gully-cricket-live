@@ -230,6 +230,54 @@ export const get = (sql, ...p) => stmt(sql).get(...p);
 export const all = (sql, ...p) => stmt(sql).all(...p);
 export const run = (sql, ...p) => stmt(sql).run(...p);
 
+// Tournaments against the AI (one human team, the rest AI). Standings are never stored: they are
+// recomputed from the completed matches each time, so they can't drift from the record.
+db.exec(`
+CREATE TABLE IF NOT EXISTS tournaments (
+  id TEXT PRIMARY KEY,
+  owner_id TEXT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL,                         -- knockout | league | groups | custom
+  settings TEXT NOT NULL,                     -- JSON: match format, structure, AI
+  status TEXT NOT NULL DEFAULT 'active',      -- active | completed | abandoned
+  champion TEXT,                              -- team key
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  completed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS tournament_teams (
+  tournament_id TEXT NOT NULL REFERENCES tournaments(id),
+  key TEXT NOT NULL,                          -- T1, T2 … (seed order)
+  seed INTEGER NOT NULL,
+  name TEXT NOT NULL, short TEXT, color TEXT, logo TEXT, category TEXT, country TEXT,
+  team_id TEXT,                               -- cricket_teams.id for real teams; NULL for custom
+  group_name TEXT,
+  human INTEGER NOT NULL DEFAULT 0,
+  personality TEXT,
+  PRIMARY KEY (tournament_id, key)
+);
+CREATE TABLE IF NOT EXISTS tournament_fixtures (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tournament_id TEXT NOT NULL REFERENCES tournaments(id),
+  order_no INTEGER NOT NULL,
+  stage TEXT NOT NULL,                        -- group | knockout | third
+  round INTEGER NOT NULL,
+  round_name TEXT NOT NULL,
+  group_name TEXT,
+  slot INTEGER NOT NULL DEFAULT 0,
+  home TEXT, away TEXT,                       -- team keys once known
+  home_src TEXT, away_src TEXT,               -- JSON: where a knockout side comes from
+  match_id TEXT,
+  side_a TEXT,                                -- which team key played as side A in the match
+  status TEXT NOT NULL DEFAULT 'pending',     -- pending | ready | live | completed | bye
+  winner TEXT,
+  decided_by TEXT,                            -- result | seeding | bye
+  result_text TEXT,
+  completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_tfix ON tournament_fixtures (tournament_id, order_no);
+`);
+
 export function tx(fn) {
   db.exec('BEGIN IMMEDIATE');
   try { const r = fn(); db.exec('COMMIT'); return r; }

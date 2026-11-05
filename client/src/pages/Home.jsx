@@ -17,12 +17,13 @@ export default function Home() {
   }
   return (
     <div className="grid gap-5 px-4 pb-12 pt-4 lg:grid-cols-[1.1fr_1fr]">
-      <div className="space-y-5">
+      <div className="min-w-0 space-y-5">
         <Hero compact />
         <QuickMatch />
+        <Tournaments />
         <CreateMatch />
       </div>
-      <div className="space-y-5">
+      <div className="min-w-0 space-y-5">
         <JoinMatch />
         <MyMatches />
         <p className="text-sm text-chalk-dim">
@@ -50,7 +51,7 @@ function Hero({ compact }) {
   );
 }
 
-function Toggle({ label, hint, checked, onChange }) {
+export function Toggle({ label, hint, checked, onChange }) {
   return (
     <label className="flex cursor-pointer items-start gap-3 py-1">
       <input type="checkbox" className="peer sr-only" checked={checked} onChange={(e) => onChange(e.target.checked)} />
@@ -62,7 +63,7 @@ function Toggle({ label, hint, checked, onChange }) {
   );
 }
 
-function Stepper({ label, value, set, min, max }) {
+export function Stepper({ label, value, set, min, max }) {
   return (
     <div>
       <span className="label">{label}</span>
@@ -77,7 +78,7 @@ function Stepper({ label, value, set, min, max }) {
 
 const STEPS = ['Who plays', 'Format', 'Rules', 'Teams'];
 
-function Choice({ selected, onClick, title, body }) {
+export function Choice({ selected, onClick, title, body }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={selected}
       className={`rounded-xl p-3 text-left ring-2 transition ${selected ? 'bg-turf/15 ring-turf' : 'bg-pitch-900/60 ring-pitch-600 hover:ring-pitch-500'}`}>
@@ -457,6 +458,45 @@ function JoinMatch() {
 }
 
 const statusLabel = { lobby: 'Setting up', live: 'Live', innings_break: 'Innings break', session_break: 'Session break', day_break: 'Day completed', suspended: 'Suspended', completed: 'Finished', abandoned: 'Abandoned' };
+
+// Tournaments against the AI: start one, or pick up where you left off.
+function Tournaments() {
+  const [rows, setRows] = useState(null);
+  useEffect(() => { api('/api/tournaments/mine').then((r) => setRows(r.tournaments)).catch(() => setRows([])); }, []);
+  const active = (rows || []).filter((t) => t.status === 'active');
+  const done = (rows || []).filter((t) => t.status !== 'active');
+  return (
+    <section className="panel p-5" aria-label="Tournaments">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1 basis-56"><h2 className="font-display text-2xl font-bold">Tournaments</h2>
+          <p className="text-sm text-chalk-dim">Your team against AI teams: groups, round robins and knockouts, all the way to a final.</p></div>
+        <Link to="/t/new" className="btn-flood shrink-0">New tournament</Link>
+      </div>
+      {active.length > 0 && (
+        <ul className="mt-3 space-y-2">
+          {active.map((t) => (
+            <li key={t.id}>
+              <Link to={`/t/${t.id}`} className="flex items-center gap-3 rounded-xl bg-pitch-900/60 p-3 hover:ring-2 hover:ring-pitch-500">
+                <span className="min-w-0 flex-1"><span className="block truncate font-semibold">{t.name}</span><span className="block text-sm text-chalk-dim">{t.myTeam}, {t.played} of {t.total} matches played</span></span>
+                <span className="shrink-0 font-semibold text-flood">Continue</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      {done.length > 0 && (
+        <details className="mt-3">
+          <summary className="cursor-pointer text-sm text-chalk-dim">Finished tournaments ({done.length})</summary>
+          <ul className="mt-2 divide-y divide-pitch-600">
+            {done.map((t) => (
+              <li key={t.id}><Link to={`/t/${t.id}`} className="flex justify-between gap-3 py-2 text-sm hover:text-flood"><span className="truncate">{t.name}</span><span className="shrink-0 text-chalk-dim">{t.status === 'abandoned' ? 'Abandoned' : `Won by ${t.champion}`}</span></Link></li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
+  );
+}
 
 function MyMatches() {
   const [rows, setRows] = useState(null);

@@ -8,6 +8,7 @@ import { get, all, run } from './db.js';
 import * as G from './engine.js';
 import { profile, leaderboard } from './stats.js';
 import { career, matchAnalysis, replay, highlights } from './analytics.js';
+import * as TOUR from './tournament.js';
 import * as CDB from './cricketdb.js';
 import * as SYNC from './sync.js';
 import { aiStep } from './ai.js';
@@ -113,7 +114,7 @@ app.post('/api/matches', needUser, wrap((req) => {
 
 app.get('/api/matches/mine', needUser, wrap((req) => ({
   matches: all(`SELECT m.id, m.name, m.status, m.team_a, m.team_b, m.team_a_meta, m.team_b_meta, m.result, m.created_at, m.umpire_id = ? AS umpire
-                FROM members mb JOIN matches m ON m.id = mb.match_id WHERE mb.user_id = ? AND mb.banned = 0
+                FROM members mb JOIN matches m ON m.id = mb.match_id WHERE mb.user_id = ? AND mb.banned = 0 AND COALESCE(json_extract(m.config, '$.participation'), '') <> 'aivai'
                 ORDER BY m.created_at DESC LIMIT 30`, req.user.id, req.user.id)
     .map(({ team_a_meta: ma, team_b_meta: mb, ...m }) => ({ ...m, umpire: !!m.umpire, result: m.result ? JSON.parse(m.result) : null, badges: badges(m, ma, mb) })),
 })));
@@ -149,6 +150,21 @@ app.get('/api/matches/:id/replay', wrap((req) => {
   if (!r) throw new G.GameError('No match with that code.');
   return r;
 }));
+// Tournaments against the AI.
+app.get('/api/tournaments/mine', needUser, wrap((req) => ({ tournaments: TOUR.listMine(req.user.id) })));
+app.post('/api/tournaments', needUser, wrap((req) => ({ id: TOUR.createTournament(req.user.id, req.body || {}) })));
+app.get('/api/tournaments/:id', wrap((req) => {
+  const v = TOUR.view(req.params.id.toUpperCase(), req.user?.id);
+  if (!v) throw new G.GameError('No tournament with that code.');
+  return v;
+}));
+app.post('/api/tournaments/:id/play', needUser, wrap((req) => ({ matchId: TOUR.playNext(req.user.id, req.params.id.toUpperCase()) })));
+app.post('/api/tournaments/:id/simulate', needUser, wrap((req) => {
+  const limit = req.body?.limit === 1 ? 1 : Infinity;
+  const job = TOUR.simulate(req.user.id, req.params.id.toUpperCase(), { limit });
+  return { job: { running: job.running, played: job.played, current: job.current, error: job.error } };
+}));
+app.post('/api/tournaments/:id/abandon', needUser, wrap((req) => { TOUR.abandon(req.user.id, req.params.id.toUpperCase()); return { ok: true }; }));
 app.get('/api/leaderboard', wrap((req) => ({ sort: req.query.sort || 'points', rows: leaderboard(String(req.query.sort || 'points')) })));
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 

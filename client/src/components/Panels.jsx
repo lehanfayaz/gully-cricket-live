@@ -119,7 +119,7 @@ export function Invite({ id }) {
   const { toast } = useApp();
   const link = matchLink(id);
   const share = async () => {
-    if (navigator.share) { try { await navigator.share({ title: 'Join my cricket match', text: `Join my match on Gully Cricket Live, code ${id}`, url: link }); return; } catch {} }
+    if (navigator.share) { try { await navigator.share({ title: 'Join my cricket match', text: `Join my match on FOOTY CRICKET LEAGUE, code ${id}`, url: link }); return; } catch {} }
     try { await navigator.clipboard.writeText(link); toast({ title: 'Link copied', body: 'Send it to your friends.', ms: 2500 }); } catch { toast({ title: 'Copy this link', body: link }); }
   };
   return (

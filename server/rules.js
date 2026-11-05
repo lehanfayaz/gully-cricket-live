@@ -5,13 +5,13 @@
 export const LIMITED = {
   batter: [1, 2, 3, 4, 5, 6],
   bowler: [1, 2, 3, 4, 5, 6],
-  maxRepeatPerOver: 3, // a bowler can't pick the same number more than 3 times in one over
+  maxRepeatPerOver: 3, // see checkDigits: one number may be used 3 times per over, every other at most twice
 };
 
 export const TEST = {
   batter: [0, 1, 2, 3, 4, 6], // 0 is a deliberate dot ball; no 5
   bowler: [1, 2, 3, 4, 6],    // no 0, no 5
-  maxRepeatPerOver: 3,        // same limit as limited overs: only the available numbers differ
+  maxRepeatPerOver: 3,        // same repetition rule as limited overs: only the available numbers differ
 };
 
 export const isTest = (config) => config.format === 'test';
@@ -27,12 +27,20 @@ export function checkDigits(config, role, seq, alreadyThisOver = []) {
     return `${role === 'bowl' ? 'Bowlers' : 'Batters'} can pick ${allowed.join(', ')}${isTest(config) ? ' in a Test match' : ''}. ${bad} isn't allowed.`;
   }
   if (role === 'bowl' && rules.maxRepeatPerOver) {
+    // Bowler repetition rule, per over: no number more than 3 times, and only ONE number may reach 3.
+    const max = rules.maxRepeatPerOver;
     const counts = {};
     for (const n of [...alreadyThisOver, ...seq]) counts[n] = (counts[n] || 0) + 1;
-    const over = Object.entries(counts).find(([, c]) => c > rules.maxRepeatPerOver);
-    if (over) {
-      const used = alreadyThisOver.filter((n) => n === Number(over[0])).length;
-      return `A bowler can use each number at most ${rules.maxRepeatPerOver} times in an over. ${over[0]} would be used ${over[1]} times${used ? ` (${used} already bowled this over)` : ''}.`;
+    const before = (d) => alreadyThisOver.filter((n) => n === Number(d)).length;
+    const tooMany = Object.entries(counts).find(([, c]) => c > max);
+    if (tooMany) {
+      const used = before(tooMany[0]);
+      return `A bowler can use a number at most ${max} times in an over. ${tooMany[0]} would be used ${tooMany[1]} times${used ? ` (${used} already bowled this over)` : ''}.`;
+    }
+    const triples = Object.entries(counts).filter(([, c]) => c === max).map(([d]) => d);
+    if (triples.length > 1) {
+      const already = triples.filter((d) => before(d) === max);
+      return `Only one number can be used ${max} times in an over; the rest at most twice. ${triples.join(' and ')} would both be used ${max} times${already.length ? ` (${already.join(' and ')} ${already.length > 1 ? 'have' : 'has'} already been used ${max} times this over)` : ''}.`;
     }
   }
   return null;

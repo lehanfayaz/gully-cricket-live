@@ -178,7 +178,7 @@ function CreateMatch() {
                 <Toggle label="Stumps at the end of each day" hint="Off: the next day starts straight away." checked={f.stumps} onChange={set('stumps')} />
                 {f.inningsPerTeam === 2 && <Toggle label="Allow the follow-on" hint={`If the side batting second trails by ${f.days >= 5 ? 200 : f.days >= 3 ? 150 : f.days === 2 ? 100 : 75}+, the leading captain can make them bat again.`} checked={f.followOn} onChange={set('followOn')} />}
               </div>
-              <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">Test rules: batters pick 0, 1, 2, 3, 4 or 6, and bowlers pick 1, 2, 3, 4 or 6 (each at most 3 times an over). A batter who plays out a six-ball dot over must score off one of the first two balls of their next over.</p>
+              <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">Test rules: batters pick 0, 1, 2, 3, 4 or 6, and bowlers pick 1, 2, 3, 4 or 6. A batter who plays out a six-ball dot over must score off one of the first two balls of their next over.</p>
             </>
           )}
         </>}

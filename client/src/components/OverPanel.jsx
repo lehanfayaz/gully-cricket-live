@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { emit } from '../api.js';
 import { useApp } from '../App.jsx';
-import { digitsFor, repeatLimit } from '../rules.js';
+import { digitsFor, repeatLimit, wouldBreak } from '../rules.js';
 
 export const NUM_COLORS = {
   0: 'bg-chalk-dim text-pitch-900',
@@ -44,17 +44,17 @@ export function SubmitOver({ state, role, cur, priv }) {
   const limit = repeatLimit(state, role);
   const bowled = limit ? cur.bowledThisOver || [] : [];
   const used = (n, extra = []) => [...bowled, ...extra].filter((x) => x === n).length;
-  const blocked = (n, extra) => limit != null && used(n, extra) >= limit;
+  const blocked = (n, extra) => limit != null && wouldBreak(n, [...bowled, ...extra], limit);
   const myReq = state.test?.requirements?.find((r) => r.batterId === cur.strikerId && r.status === 'active');
   const ruleNote = (
     <>
       {state.format === 'test' && (
-        <p className="mt-2 text-xs text-chalk-faint">Test rules: {role === 'bowl' ? 'bowlers pick 1, 2, 3, 4 or 6, each at most 3 times an over' : 'batters pick 0, 1, 2, 3, 4 or 6 (0 is a dot ball)'}. No 5.</p>
+        <p className="mt-2 text-xs text-chalk-faint">Test rules: {role === 'bowl' ? 'bowlers pick 1, 2, 3, 4 or 6' : 'batters pick 0, 1, 2, 3, 4 or 6 (0 is a dot ball)'}. No 5.</p>
       )}
       {limit && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs" aria-label="Times each number has been used this over">
-          <span className="text-chalk-faint">Used this over (max {limit} each):</span>
-          {digits.map((n) => <span key={n} className={`rounded px-1.5 py-0.5 tabular-nums ${used(n, seq) >= limit ? 'bg-leather text-chalk' : 'bg-pitch-700 text-chalk-dim'}`}>{n}: {used(n, seq)}</span>)}
+          <span className="text-chalk-faint">Used this over (one number up to 3, the rest up to 2):</span>
+          {digits.map((n) => <span key={n} className={`rounded px-1.5 py-0.5 tabular-nums ${blocked(n, seq) ? 'bg-leather text-chalk' : 'bg-pitch-700 text-chalk-dim'}`}>{n}: {used(n, seq)}</span>)}
         </div>
       )}
       {role === 'bat' && myReq && (
@@ -122,7 +122,7 @@ export function SubmitOver({ state, role, cur, priv }) {
         <div className="mt-4 grid grid-cols-3 gap-3">
           {digits.map((n) => (
             <button key={n} type="button" onClick={() => setSeq([n])} aria-pressed={pick === n} disabled={blocked(n, [])}
-              title={blocked(n, []) ? `${n} has been used ${limit} times this over` : undefined}
+              title={blocked(n, []) ? `${n} can't be used again this over` : undefined}
               className={`aspect-[5/4] rounded-2xl font-display text-6xl font-extrabold shadow-lg transition disabled:opacity-20 ${NUM_COLORS[n]} ${pick === n ? 'scale-105 ring-4 ring-chalk' : pick != null ? 'opacity-50' : ''}`}>{n}</button>
           ))}
         </div>
@@ -141,7 +141,7 @@ export function SubmitOver({ state, role, cur, priv }) {
       <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: `repeat(${digits.length}, minmax(0, 1fr))` }}>
         {digits.map((n) => (
           <button key={n} type="button" onClick={() => add(n)} disabled={seq.length >= need || blocked(n, seq)}
-            title={blocked(n, seq) ? `${n} can't be used more than ${limit} times in an over` : undefined}
+            title={blocked(n, seq) ? `${n} can't be used again this over: only one number may be used 3 times` : undefined}
             className={`rounded-xl py-4 font-display text-3xl font-extrabold shadow-md transition active:scale-95 disabled:opacity-25 ${NUM_COLORS[n]}`}>{n}</button>
         ))}
       </div>

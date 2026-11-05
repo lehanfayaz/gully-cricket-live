@@ -124,6 +124,7 @@ await bowlCap.bad('captain', { action: { type: 'next_bowler', team: tossWinner, 
 // Limited-overs bowler limit: no number more than three times in an over.
 for (const bad of [[6, 6, 5, 5, 5, 5], [1, 1, 1, 1, 2, 3], [5, 5, 5, 5, 1, 2]]) await bowler().bad('over:submit', { sequence: bad }, /at most 3 times/);
 await bowler().bad('over:submit', { sequence: [0, 0, 0, 1, 2, 3] }, /isn't allowed/);
+for (const bad of [[3, 3, 3, 5, 5, 5], [5, 5, 5, 3, 3, 3], [3, 3, 3, 4, 4, 4]]) await bowler().bad('over:submit', { sequence: bad }, /Only one number/);
 await bowler().ok('over:submit', { sequence: [5, 5, 5, 1, 2, 3] });
 await batter().ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] });
 await settle();

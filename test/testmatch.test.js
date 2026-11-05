@@ -65,7 +65,9 @@ const b1 = bowler(), firstBat = batter();
 // The 3-per-over limit applies in Tests too.
 await b1.bad('over:submit', { sequence: [6, 6, 4, 4, 4, 4] }, /at most 3 times/);
 await b1.bad('over:submit', { sequence: [6, 6, 6, 6, 1, 2] }, /at most 3 times/);
-await b1.ok('over:submit', { sequence: [6, 6, 6, 1, 1, 1] });
+await b1.bad('over:submit', { sequence: [6, 6, 6, 1, 1, 1] }, /Only one number/); // two numbers three times
+await b1.bad('over:submit', { sequence: [3, 3, 3, 4, 4, 4] }, /Only one number/);
+await b1.ok('over:submit', { sequence: [6, 6, 6, 1, 1, 2] });
 await firstBat.ok('over:submit', { sequence: [0, 0, 0, 0, 0, 0] }); // a dot over
 await settle();
 st = fan.last();
@@ -147,7 +149,8 @@ await ump.ok('match:start');
 await settle();
 for (let k = 0; k < 6; k++) {
   if (k === 3) await bowler().bad('over:submit', { sequence: [6] }, /at most 3 times.*3 already bowled/);
-  await bowler().ok('over:submit', { sequence: [k < 3 ? 6 : 4] }); await batter().ok('over:submit', { sequence: [0] });
+  if (k === 5) await bowler().bad('over:submit', { sequence: [4] }, /Only one number.*6 has already been used 3 times/);
+  await bowler().ok('over:submit', { sequence: [[6, 6, 6, 4, 4, 2][k]] }); await batter().ok('over:submit', { sequence: [0] });
 }
 await settle();
 st = fan.last();
@@ -173,10 +176,10 @@ assert.equal(st.status, 'completed'); assert.equal(st.result.draw, true, 'schedu
 const t3 = await setup(host, { format: 'test', mode: 'auto', play: 'over', days: 1, sessionsPerDay: 1, oversPerSession: 30, wickets: 1 },
   { A: [ali], B: [bilal] });
 const first = t3.batFirst, second = first === 'A' ? 'B' : 'A';
-for (let o = 0; o < 3; o++) { await bowler().ok('over:submit', { sequence: [1, 1, 1, 2, 2, 2] }); await batter().ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] }); await settle(); }
+for (let o = 0; o < 3; o++) { await bowler().ok('over:submit', { sequence: [1, 1, 1, 2, 2, 3] }); await batter().ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] }); await settle(); }
 await byId[fan.last().captains[first]].ok('test', T({ type: 'declare' }));
 await settle();
-await bowler().ok('over:submit', { sequence: [2, 2, 2, 3, 3, 3] }); await batter().ok('over:submit', { sequence: [2, 2, 2, 2, 2, 2] });
+await bowler().ok('over:submit', { sequence: [2, 2, 2, 3, 3, 4] }); await batter().ok('over:submit', { sequence: [2, 2, 2, 2, 2, 2] });
 await settle();
 st = fan.last();
 assert.equal(st.status, 'innings_break'); assert.equal(st.test.followOn.team, first); assert.equal(st.test.followOn.lead, 108);
@@ -185,7 +188,7 @@ await byId[st.captains[first]].ok('test', T({ type: 'follow_on', enforce: true }
 await settle();
 st = fan.last();
 assert.equal(st.innings[2].batting, second, 'follow-on: same side bats again');
-await bowler().ok('over:submit', { sequence: [3, 3, 3, 4, 4, 4] }); await batter().ok('over:submit', { sequence: [3, 3, 3, 3, 3, 3] });
+await bowler().ok('over:submit', { sequence: [3, 3, 3, 4, 4, 6] }); await batter().ok('over:submit', { sequence: [3, 3, 3, 3, 3, 3] });
 await settle();
 st = fan.last();
 assert.match(st.result.text, /won by an innings and 108 runs/);

@@ -55,6 +55,10 @@ export function stageLabel(state) {
     case 'toss_decision': return `Toss completed. ${t(state.toss.winner)} to choose`;
     case 'ready_to_start': return 'Ready to start';
     case 'live': return 'Match live';
+    case 'resumed': return 'Resumed';
+    case 'session_break': return 'Session completed';
+    case 'day_break': return 'Day completed';
+    case 'suspended': return 'Suspended';
     case 'innings_break': return 'Innings break';
     default: return 'Match finished';
   }
@@ -95,10 +99,12 @@ export function Lobby({ state, me, priv, online, openLineups }) {
     <div className="space-y-3">
       <StageTracker state={state} />
       <section className="panel p-4 text-sm text-chalk-dim">
-        <span className="font-semibold text-chalk">{state.play === 'ball' ? 'Ball by ball' : 'Complete over'}</span>
+        <span className="font-semibold text-chalk">{{ t20: 'T20. ', odi: 'ODI. ', custom: '', test: 'Test match. ' }[state.format] || ''}{state.play === 'ball' ? 'Ball by ball' : 'Complete over'}</span>
         {state.play === 'ball' ? ': bowler and batter pick one number per ball. ' : ': bowler and batter lock in the rest of the over at once. '}
         <span className="font-semibold text-chalk">{state.mode === 'umpire' ? `Umpire: ${state.umpire.name}.` : 'No umpire.'}</span>
-        {` ${c.overs} over${c.overs > 1 ? 's' : ''} a side, ${c.wickets} wicket${c.wickets > 1 ? 's' : ''}, up to ${c.playersPerTeam} a side. `}
+        {state.format === 'test'
+          ? ` ${c.days} day${c.days > 1 ? 's' : ''}, ${c.sessionsPerDay} session${c.sessionsPerDay > 1 ? 's' : ''} a day of ${c.oversPerSession} overs, ${c.inningsPerTeam} innings each, ${c.wickets} wickets an innings. `
+          : ` ${c.overs} over${c.overs > 1 ? 's' : ''} a side, ${c.wickets} wicket${c.wickets > 1 ? 's' : ''}, up to ${c.playersPerTeam} a side. `}
         {c.noConsecutive ? 'No bowler bowls two overs in a row. ' : ''}
         {c.spectators === 'watch' ? 'Spectators watch only.' : 'Spectators can chat.'}
       </section>

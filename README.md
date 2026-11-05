@@ -17,6 +17,23 @@ A real-time multiplayer number-cricket game that runs in the browser. One person
 - Same number: out, and the rest of that submission is ignored. Different: the batter scores what they picked.
 - Overs are always six legal balls. After a wicket, the next batter faces the rest of the same over against the same bowler, entering only as many numbers as there are balls left.
 
+## Formats and digit rules
+
+| Format | Overs | Batter may pick | Bowler may pick |
+|---|---|---|---|
+| T20 / ODI / Custom (limited overs) | 20 / 50 / your choice | 1–6, any number of times | 1–6, but no number more than 3 times in one over (resets each over) |
+| Test match | Days × sessions × overs per session | 0, 1, 2, 3, 4, 6 (0 = dot ball, no 5) | 1, 2, 3, 4, 6 (no 0 or 5), no repetition limit |
+
+These rules live in `server/rules.js` and are enforced on the server; the pads only show valid buttons.
+
+## Test matches
+
+- **Set-up:** 1–5 days, 1–4 sessions a day, overs per session, wickets per innings (default 10), 1 or 2 innings each, an optional session time limit, lunch/tea/stumps breaks (switch one off to roll straight on), optional follow-on.
+- **Sessions** end after their overs (or early, by the umpire/host, or on a captain's approved request). A session ending never ends an over or an innings: the same over, batter, bowler and any scoring requirement carry on next session. The last session of the last day ends in a draw if there's no result.
+- **Suspend / continue:** the host (or umpire) can save the match at any point. Nothing moves on until it's continued, and it uses the same link. Every suspension is logged.
+- **Innings** end on all out, a declaration (batting captain or umpire), or the chase. Follow-on margins: 200 (5 days), 150 (3–4), 100 (2), 75 (1). Innings victories are detected after the third innings.
+- **Dot-over rule:** a batter who plays out all six legal balls of an over without scoring must score off one of the first two legal balls of their next over. It survives breaks and suspensions, is cancelled if they're out or the innings ends, and is tracked per batter. If broken: no umpire, the batter is out (not credited to the bowler); with an umpire, play is held until the umpire gives them out or waives it.
+
 ## Umpire, host and captains
 
 - **No umpire**: fully automatic. The creator is the "host": they can moderate chat and end a match early, nothing more.

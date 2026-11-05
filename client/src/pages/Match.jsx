@@ -6,6 +6,7 @@ import { Commentary, OverStrip, REVEAL_STEP, ScoreBug, Scorecards } from '../com
 import { InningsBreak, Lobby, ResultCard, Waiting } from '../components/Panels.jsx';
 import { OverStatus, SubmitOver } from '../components/OverPanel.jsx';
 import { Lineups } from '../components/Lineups.jsx';
+import { SessionHistory, TestDashboard } from '../components/TestPanel.jsx';
 import Chat from '../components/Chat.jsx';
 import UmpirePanel from '../components/Umpire.jsx';
 import { Cheers, FxOverlay } from '../components/Fx.jsx';
@@ -134,7 +135,7 @@ function Live({ id, me }) {
           <div className="space-y-3 p-3 lg:p-0 lg:pt-3">
             {tab === 'play' && <PlayTab state={state} priv={priv} me={me} isUmp={isUmp} online={online} openLineups={() => setTab('lineups')} />}
             {tab === 'lineups' && <Lineups state={state} priv={priv} me={me} />}
-            {tab === 'card' && <Scorecards state={state} />}
+            {tab === 'card' && <><Scorecards state={state} /><SessionHistory state={state} /></>}
             {tab === 'ump' && (isUmp || priv.isHost) && <UmpirePanel state={state} priv={priv} />}
             {tab === 'chat' && <Chat className="h-[calc(100dvh-15rem)] lg:hidden" state={state} me={me} priv={priv} messages={messages} />}
           </div>
@@ -183,12 +184,15 @@ function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
   const inn = state.innings[state.innings.length - 1];
   const captainHere = priv.captainOf?.includes(inn?.bowling) || priv.captainOf?.includes(inn?.batting);
   let panel = null;
-  if (state.status === 'innings_break') panel = <InningsBreak state={state} isUmp={isUmp} />;
+  const test = state.format === 'test';
+  if (['suspended', 'session_break', 'day_break'].includes(state.status)) panel = null; // the Test dashboard explains the pause
+  else if (state.status === 'innings_break') panel = test && state.test?.followOn ? null : <InningsBreak state={state} isUmp={isUmp} />;
   else if (cur.phase === 'paused') panel = <Waiting title="Play is paused" body="The umpire will resume the match shortly." />;
   else if (role) panel = <SubmitOver key={`${cur.number}-${cur.overNumber}-${cur.ballInOver}-${cur.open}`} state={state} role={role} cur={cur} priv={priv} />;
   else panel = <OverStatus cur={cur} me={me} single={state.play === 'ball'} />;
   return (
     <>
+      {test && state.test && <TestDashboard state={state} priv={priv} me={me} />}
       <section className="panel mown p-4">
         <div className="mb-3 flex items-baseline justify-between">
           <h2 className="font-display text-xl font-bold">{cur?.over ? `Over ${cur.over.number}${cur.over.finished ? ', finished' : ''}` : 'This over'}</h2>

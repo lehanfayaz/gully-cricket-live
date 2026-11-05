@@ -5,6 +5,7 @@
 // them ball by ball inside one transaction, records every ball, and reveals the whole over.
 import crypto from 'node:crypto';
 import { get, all, run, tx } from './db.js';
+import { checkDigits, isDotOver, isTest } from './rules.js';
 
 export class GameError extends Error {}
 const fail = (msg) => { throw new GameError(msg); };
@@ -13,6 +14,15 @@ const now = () => Date.now();
 export const DEFAULT_CONFIG = {
   mode: 'auto',             // 'auto' (no umpire, fully automatic) | 'umpire'
   play: 'over',             // 'over' (lock in the rest of the over at once) | 'ball' (one number per ball)
+  format: 'custom',         // 't20' | 'odi' | 'custom' (limited overs) | 'test'
+  // Test match settings (ignored for limited-overs matches)
+  days: 3,
+  sessionsPerDay: 3,
+  oversPerSession: 15,
+  inningsPerTeam: 2,
+  sessionMinutes: 0,        // optional time limit shown as a countdown; 0 = off
+  lunch: true, tea: true, stumps: true, // pause for these breaks (off = roll straight into the next session)
+  followOn: true,
   overs: 2,
   wickets: 3,
   playersPerTeam: 11,
@@ -25,10 +35,19 @@ export function sanitizeConfig(input = {}, base = DEFAULT_CONFIG) {
   const c = { ...base };
   const int = (v, lo, hi, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
   c.overs = int(input.overs, 1, 50, c.overs);
-  c.wickets = int(input.wickets, 1, 20, c.wickets);
+  c.wickets = int(input.wickets, 1, 20, input.format === 'test' && !('wickets' in input) ? 10 : c.wickets);
   c.playersPerTeam = int(input.playersPerTeam, 1, 15, c.playersPerTeam);
   if (input.mode === 'auto' || input.mode === 'umpire') c.mode = input.mode;
   if (input.play === 'over' || input.play === 'ball') c.play = input.play;
+  if (['t20', 'odi', 'custom', 'test'].includes(input.format)) c.format = input.format;
+  if (c.format === 't20') c.overs = 20;
+  if (c.format === 'odi') c.overs = 50;
+  c.days = int(input.days, 1, 5, c.days);
+  c.sessionsPerDay = int(input.sessionsPerDay, 1, 4, c.sessionsPerDay);
+  c.oversPerSession = int(input.oversPerSession, 1, 90, c.oversPerSession);
+  c.inningsPerTeam = int(input.inningsPerTeam, 1, 2, c.inningsPerTeam);
+  c.sessionMinutes = int(input.sessionMinutes, 0, 240, c.sessionMinutes);
+  for (const k of ['lunch', 'tea', 'stumps', 'followOn']) if (k in input) c[k] = !!input[k];
   if (input.spectators === 'open' || input.spectators === 'watch') c.spectators = input.spectators;
   for (const k of ['superOver', 'noConsecutive']) if (k in input) c[k] = !!input[k];
   return c;
@@ -39,7 +58,7 @@ export function loadMatch(id) {
   const m = get('SELECT * FROM matches WHERE id = ?', id);
   if (!m) fail('Match not found.');
   // Matches created before modes existed always had an umpire.
-  m.config = { ...DEFAULT_CONFIG, mode: 'umpire', ...JSON.parse(m.config) };
+  m.config = { ...DEFAULT_CONFIG, mode: 'umpire', format: 'custom', ...JSON.parse(m.config) };
   delete m.config.freshSetAfterWicket; // retired: overs are always six legal balls now
   m.result = m.result ? JSON.parse(m.result) : null;
   return m;
@@ -79,7 +98,12 @@ function ballsLeftInOver(inn) {
   const t = totals(inn.id);
   return Math.min(6 - (t.balls % 6), inn.max_balls - t.balls);
 }
-const capFor = (m, inn) => (m.config.play === 'ball' ? 1 : ballsLeftInOver(inn));
+function capFor(m, inn) {
+  let n = ballsLeftInOver(inn);
+  // In a Test, a submission never runs past the end of the session (the over carries on next session).
+  if (isTest(m.config)) n = Math.min(n, sessionQuota(m) - sessionBalls(m));
+  return m.config.play === 'ball' ? Math.min(1, n) : n;
+}
 const atOverBoundary = (inn) => totals(inn.id).balls % 6 === 0;
 
 export const oversText = (balls) => `${Math.floor(balls / 6)}.${balls % 6}`;
@@ -245,6 +269,7 @@ export function decideToss(userId, matchId, decision, ctx) {
 function beginMatch(m, userId, ctx) {
   fixCaptains(m.id);
   run(`UPDATE matches SET status = 'live', started_at = ? WHERE id = ?`, now(), m.id);
+  if (isTest(m.config)) startSessionRow(m, 1, 1);
   record(m.id, userId, 'start', 'The match is live.', {}, false);
   createInnings(loadMatch(m.id), 1, ctx);
 }
@@ -314,12 +339,21 @@ function refreshCurrent(m, inn) {
 }
 
 function overCall(m, inn, ctx, why = '') {
+  const mm = loadMatch(m.id);
   const cur = latestInnings(m.id);
-  ctx.notify.push({ userId: cur.bowler_id, title: 'Your over: bowl', body: `${why}Lock in six numbers against ${userName(cur.striker_id)}.`, kind: 'bowl' });
-  ctx.notify.push({ userId: cur.striker_id, title: 'Your over: bat', body: `${why}Lock in six numbers against ${userName(cur.bowler_id)}.`, kind: 'bat' });
+  if (mm.status !== 'live' || !cur || cur.status !== 'live') return;
+  const n = capFor(mm, cur);
+  const what = n === 1 ? 'Pick your number' : `Lock in ${n} numbers`;
+  ctx.notify.push({ userId: cur.bowler_id, title: 'Your turn: bowl', body: `${why}${what} against ${userName(cur.striker_id)}.`, kind: 'bowl' });
+  ctx.notify.push({ userId: cur.striker_id, title: 'Your turn: bat', body: `${why}${what} against ${userName(cur.bowler_id)}.`, kind: 'bat' });
 }
 
-function createInnings(m, number, ctx) {
+const teamTotal = (matchId, team) =>
+  all('SELECT id FROM innings WHERE match_id = ? AND batting = ?', matchId, team).reduce((s, i) => s + totals(i.id).runs, 0);
+const NO_LIMIT = 1_000_000_000; // Test innings have no over limit
+
+function createInnings(m, number, ctx, opts = {}) {
+  if (isTest(m.config)) return createTestInnings(m, number, ctx, opts);
   const prev = number > 1 ? get('SELECT * FROM innings WHERE match_id = ? AND number = ?', m.id, number - 1) : null;
   const superOver = number >= 3;
   let batting, target = null;
@@ -330,14 +364,48 @@ function createInnings(m, number, ctx) {
   if (number === 2 || number === 4) target = totals(prev.id).runs + 1;
   const maxBalls = superOver ? 6 : m.config.overs * 6;
   const maxWickets = superOver ? Math.min(2, m.config.wickets) : m.config.wickets;
+  insertInnings(m, number, batting, target, maxBalls, maxWickets, superOver, false);
+  const label = superOver ? `Super over (${number === 3 ? 'first' : 'second'} half)` : number === 1 ? 'First innings' : 'Second innings';
+  const inn = latestInnings(m.id);
+  announce(m.id, `${label}: ${teamName(m, batting)} bat${target ? `, needing ${target} to win` : ''}. ${userName(inn.striker_id)} faces ${userName(inn.bowler_id)}.`, { type: 'innings', number });
+  overCall(m, null, ctx);
+}
+
+function insertInnings(m, number, batting, target, maxBalls, maxWickets, superOver, followOn) {
   const draft = { id: -1, batting, bowling: other(batting) };
   const striker = pickStriker(m, draft);
   const bowler = pickBowler(m, draft, null);
-  run(`INSERT INTO innings (match_id, number, batting, bowling, max_balls, max_wickets, target, super_over, striker_id, bowler_id, started_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`, m.id, number, batting, other(batting), maxBalls, maxWickets, target, superOver ? 1 : 0, striker, bowler, now());
-  const label = superOver ? `Super over (${number === 3 ? 'first' : 'second'} half)` : number === 1 ? 'First innings' : 'Second innings';
-  announce(m.id, `${label}: ${teamName(m, batting)} bat${target ? `, needing ${target} to win` : ''}. ${userName(striker)} faces ${userName(bowler)}.`, { type: 'innings', number });
+  run(`INSERT INTO innings (match_id, number, batting, bowling, max_balls, max_wickets, target, super_over, follow_on, striker_id, bowler_id, started_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, m.id, number, batting, other(batting), maxBalls, maxWickets, target, superOver ? 1 : 0, followOn ? 1 : 0, striker, bowler, now());
+}
+
+// ---------- Test match innings ----------
+const ORDINAL = ['', 'First', 'Second', 'Third', 'Fourth'];
+function createTestInnings(m, number, ctx, { followOn = false } = {}) {
+  const inn = (k) => get('SELECT * FROM innings WHERE match_id = ? AND number = ?', m.id, k);
+  let batting;
+  if (number === 1) batting = m.toss_bat;
+  else if (number === 2) batting = other(inn(1).batting);
+  else if (number === 3) batting = followOn ? inn(2).batting : inn(1).batting;
+  else batting = other(inn(3).batting);
+  let target = null;
+  const last = m.config.inningsPerTeam === 1 ? 2 : 4;
+  if (number === last) target = Math.max(1, teamTotal(m.id, other(batting)) - teamTotal(m.id, batting) + 1);
+  insertInnings(m, number, batting, target, NO_LIMIT, m.config.wickets, false, followOn);
+  const cur = latestInnings(m.id);
+  const fresh = loadMatch(m.id);
+  announce(m.id, `Day ${fresh.test_day}, session ${fresh.test_session}. ${ORDINAL[number]} innings${followOn ? ' (follow-on)' : ''}: ${teamName(m, batting)} bat${target ? `, needing ${target} to win` : ''}. ${userName(cur.striker_id)} faces ${userName(cur.bowler_id)}.`, { type: 'innings', number });
   overCall(m, null, ctx);
+}
+
+// Normal Test follow-on margins, scaled to the match length.
+export const followOnMargin = (cfg) => (cfg.days >= 5 ? 200 : cfg.days >= 3 ? 150 : cfg.days === 2 ? 100 : 75);
+function followOnPending(m) {
+  if (!isTest(m.config) || m.config.inningsPerTeam !== 2 || !m.config.followOn) return null;
+  const rows = all('SELECT * FROM innings WHERE match_id = ? ORDER BY number', m.id);
+  if (rows.length !== 2 || rows[1].status !== 'done') return null;
+  const lead = totals(rows[0].id).runs - totals(rows[1].id).runs;
+  return lead >= followOnMargin(m.config) ? { team: rows[0].batting, lead } : null;
 }
 
 export function startMatch(userId, matchId, ctx) {
@@ -357,6 +425,7 @@ export function nextInnings(userId, matchId, ctx) {
     const m = loadMatch(matchId);
     if (!isUmpire(m, userId)) fail('Only the umpire can start the next innings.');
     if (m.status !== 'innings_break') fail('There is no innings break right now.');
+    if (followOnPending(m)) fail(`${teamName(m, followOnPending(m).team)}'s captain decides on the follow-on first.`);
     const inn = latestInnings(matchId);
     run(`UPDATE matches SET status = 'live' WHERE id = ?`, matchId);
     record(matchId, userId, 'next_innings', `The umpire started innings ${inn.number + 1}.`, {}, false);
@@ -364,28 +433,41 @@ export function nextInnings(userId, matchId, ctx) {
   });
 }
 
-// ---------- the over: both sides lock in six numbers ----------
+// ---------- the over: both sides lock in their numbers ----------
 const commit = (digits) => {
   const salt = crypto.randomBytes(8).toString('hex');
   return { salt, hash: crypto.createHash('sha256').update(`${digits}:${salt}`).digest('hex') };
 };
+// The bowler's numbers already bowled in the over in progress (for the repetition limit).
+function bowledThisOver(inn) {
+  const t = totals(inn.id);
+  if (t.balls % 6 === 0) return [];
+  const start = t.balls - (t.balls % 6) + 1;
+  return all('SELECT bowl_num FROM balls WHERE innings_id = ? AND voided = 0 AND ball_no >= ? ORDER BY ball_no', inn.id, start).map((r) => r.bowl_num);
+}
 
 export function submitOver(userId, matchId, seq, ctx) {
   return tx(() => {
     const m = loadMatch(matchId);
+    if (m.status === 'suspended') fail('The match is suspended. It carries on when the host resumes it.');
+    if (m.status === 'session_break' || m.status === 'day_break') fail('It\'s a break between sessions. Play resumes when the next session starts.');
     if (m.status !== 'live') fail('The match is not in play.');
     if (m.paused) fail('The umpire has paused the match.');
     const inn = latestInnings(matchId);
     if (!inn || inn.status !== 'live') fail('No innings in progress.');
+    if (get(`SELECT 1 FROM dot_rules WHERE innings_id = ? AND status = 'pending'`, inn.id)) fail('Waiting for the umpire to rule on the dot-over requirement.');
     let set = openSet(inn.id);
     const bowlerId = set ? set.bowler_id : inn.bowler_id;
     const batterId = set ? set.batter_id : inn.striker_id;
     const role = userId === bowlerId ? 'bowl' : userId === batterId ? 'bat' : null;
     if (!role) fail("It isn't your turn.");
-    // How many numbers this submission must have: one per ball still to come in this over (or exactly one, ball by ball).
+    // How many numbers this submission must have: one per ball still to come in this over (and session), or exactly one ball by ball.
     const need = set ? set.cap - set.used : capFor(m, inn);
-    if (!Array.isArray(seq) || seq.length !== need || !seq.every((n) => Number.isInteger(n) && n >= 1 && n <= 6))
-      fail(need === 1 ? 'Pick exactly one number from 1 to 6.' : `Enter exactly ${need} numbers, each from 1 to 6: that's how many balls are left in this over.`);
+    if (need < 1) fail('This session is over. Wait for the next one to start.');
+    if (!Array.isArray(seq) || seq.length !== need || !seq.every((n) => Number.isInteger(n)))
+      fail(need === 1 ? 'Pick exactly one number.' : `Enter exactly ${need} numbers: that's how many balls are left in this over.`);
+    const problem = checkDigits(m.config, role, seq, role === 'bowl' ? bowledThisOver(inn) : []);
+    if (problem) fail(problem);
     if (!set) {
       run(`INSERT INTO sets (innings_id, bowler_id, batter_id, seq, salt, hash, cap, created_at) VALUES (?,?,?,?,?,?,?,?)`,
         inn.id, bowlerId, batterId, '', '', '', need, now());
@@ -413,59 +495,116 @@ export function submitOver(userId, matchId, seq, ctx) {
   });
 }
 
+const activeRule = (inningsId, batterId) =>
+  get(`SELECT * FROM dot_rules WHERE innings_id = ? AND batter_id = ? AND status = 'active'`, inningsId, batterId);
+const resolveRule = (id, status, note = null) =>
+  run('UPDATE dot_rules SET status = ?, resolved_at = ?, note = COALESCE(?, note) WHERE id = ?', status, now(), note, id);
+
 function reveal(m, inn, set, ctx) {
   const bowl = set.seq.split('').map(Number);
   const bat = set.bat_seq.split('').map(Number);
   const start = totals(inn.id);
   const batter = userName(set.batter_id), bowler = userName(set.bowler_id);
+  const test = isTest(m.config);
+  const sIdx = test ? sessionIdx(m) : null;
   // (set.used is only non-zero for an over that was half-played under the very first one-ball-at-a-time rules.)
   let runs = start.runs, balls = start.balls, wickets = start.wickets, used = set.used, wicket = false;
+  let pendingRule = false, newRule = false;
   const out = [];
   for (let i = set.used; i < set.cap; i++) {
     const pick = bat[i - set.used];
     wicket = pick === bowl[i];
     const r = wicket ? 0 : pick;
     balls += 1; runs += r; used += 1;
-    run(`INSERT INTO balls (innings_id, set_id, set_index, ball_no, stint, batter_id, bowler_id, bowl_num, bat_num, runs, is_wicket, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, inn.id, set.id, i, balls, start.wickets, set.batter_id, set.bowler_id, bowl[i], pick, r, wicket ? 1 : 0, now());
-    out.push({ i, pos: (balls - 1) % 6, bat: pick, bowl: bowl[i], runs: r, wicket });
+    const ins = run(`INSERT INTO balls (innings_id, set_id, set_index, ball_no, stint, batter_id, bowler_id, bowl_num, bat_num, runs, is_wicket, session_idx, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, inn.id, set.id, i, balls, start.wickets, set.batter_id, set.bowler_id, bowl[i], pick, r, wicket ? 1 : 0, sIdx, now());
+    const ball = { i, pos: (balls - 1) % 6, bat: pick, bowl: bowl[i], runs: r, wicket };
+    out.push(ball);
     const label = ballLabel(balls);
     const line = wicket ? `OUT! Both picked ${bowl[i]}. ${batter} is out.`
       : r === 6 ? `SIX! ${batter} 6, ${bowler} ${bowl[i]}.` : r === 4 ? `FOUR! ${batter} 4, ${bowler} ${bowl[i]}.`
+      : r === 0 ? `Dot ball. ${batter} 0, ${bowler} ${bowl[i]}.`
       : `${r} run${r > 1 ? 's' : ''}. ${batter} ${pick}, ${bowler} ${bowl[i]}.`;
     if (wicket) wickets += 1;
     announce(m.id, `${line} ${teamName(m, inn.batting)} ${runs}/${wickets} (ball ${label}).`, { type: 'ball', runs: r, wicket, bat: pick, bowl: bowl[i], over: label });
-    if (wicket || (inn.target && runs >= inn.target) || balls >= inn.max_balls) break;
+
+    if (test) {
+      // Dot-over requirement: score off ball 1 or 2 of this over, or it's a violation.
+      const overIdx = Math.floor((balls - 1) / 6);
+      const req = activeRule(inn.id, set.batter_id);
+      if (req && req.over_idx === overIdx) {
+        if (wicket) resolveRule(req.id, 'dismissed');
+        else if (r > 0) { resolveRule(req.id, 'met'); announce(m.id, `✅ ${batter} scored and has met the dot-over requirement.`, { type: 'rule' }); }
+        else if (ball.pos === 1) {
+          if (m.config.mode === 'auto') {
+            run(`UPDATE balls SET is_wicket = 1, dismissal = 'dot_rule' WHERE id = ?`, Number(ins.lastInsertRowid));
+            resolveRule(req.id, 'violated', 'Out under the dot-over rule');
+            wicket = true; wickets += 1; ball.wicket = true;
+            announce(m.id, `❌ Dot-over rule: ${batter} didn't score off the first two balls of the over and is out.`, { type: 'rule', wicket: true });
+          } else {
+            resolveRule(req.id, 'pending');
+            pendingRule = true;
+            announce(m.id, `⚠ Dot-over rule broken: ${batter} didn't score off the first two balls of the over. Play is held until the umpire rules.`, { type: 'rule' });
+            ctx.notify.push({ userId: m.umpire_id, title: 'Rule the dot-over requirement', body: `${batter} didn't score off the first two balls. Give out or waive.`, kind: 'umpire' });
+          }
+        }
+      }
+      if (!wicket && !pendingRule && ball.pos === 5) {
+        const overBalls = all('SELECT * FROM balls WHERE innings_id = ? AND voided = 0 AND ball_no BETWEEN ? AND ? ORDER BY ball_no', inn.id, overIdx * 6 + 1, overIdx * 6 + 6);
+        if (isDotOver(overBalls, set.batter_id)) {
+          run('INSERT INTO dot_rules (match_id, innings_id, batter_id, over_idx, created_at) VALUES (?,?,?,?,?)', m.id, inn.id, set.batter_id, overIdx + 1, now());
+          newRule = true;
+          announce(m.id, `⚠ Scoring requirement: ${batter} faced a dot over and must score within the first 2 legal balls of the next over.`, { type: 'rule' });
+        }
+      }
+    }
+    if (wicket || pendingRule || (inn.target && runs >= inn.target) || balls >= inn.max_balls) break;
   }
   const overRuns = out.reduce((s, b) => s + b.runs, 0);
   const faced = out.length;
   const t = totals(inn.id);
-  const chased = inn.target && t.runs >= inn.target;
-  const ended = chased || t.wickets >= inn.max_wickets || t.balls >= inn.max_balls;
-  const overDone = t.balls % 6 === 0;
+  const ended = (inn.target && t.runs >= inn.target) || t.wickets >= inn.max_wickets || t.balls >= inn.max_balls;
   run(`UPDATE sets SET used = ?, status = 'closed', end_reason = ?, revealed_at = ? WHERE id = ?`,
-    used, ended ? 'innings' : wicket ? 'wicket' : 'complete', now(), set.id);
+    used, ended ? 'innings' : wicket ? 'wicket' : pendingRule ? 'rule' : 'complete', now(), set.id);
   ctx.fx.push({ type: 'reveal', balls: out, cap: set.cap, batter, bowler, runs: overRuns, wicket });
   if (set.cap > 1) announce(m.id, `Revealed: ${batter} ${overRuns} run${overRuns === 1 ? '' : 's'} off ${faced} ball${faced === 1 ? '' : 's'}${wicket ? ', then out' : ''}. Bowler ${set.seq.slice(set.used)}, batter ${set.bat_seq.slice(0, set.cap - set.used)}.`, { type: 'over' });
-
-  if (ended) return endInnings(m, inn, ctx);
-  const fresh = latestInnings(m.id);
-  if (wicket) {
-    const nb = pickStriker(m, fresh);
-    run('UPDATE innings SET striker_id = ? WHERE id = ?', nb, inn.id);
-    const left = 6 - (t.balls % 6);
-    announce(m.id, `${userName(nb)} walks out to bat${overDone ? '' : ` to face the last ${left} ball${left === 1 ? '' : 's'} of the over`}. ${inn.max_wickets - t.wickets} wicket${inn.max_wickets - t.wickets > 1 ? 's' : ''} left.`, { type: 'newbatter' });
-  }
-  if (overDone) {
-    const nextBowler = pickBowler(m, fresh, set.bowler_id);
-    run('UPDATE innings SET bowler_id = ? WHERE id = ?', nextBowler, inn.id);
-    announce(m.id, `End of over ${t.balls / 6}. ${teamName(m, inn.batting)} ${t.runs}/${t.wickets}. ${userName(nextBowler)} bowls next.`, { type: 'endover' });
-  }
-  // Ball by ball, only call people when a new over or a new batter starts.
-  if (overDone || wicket || m.config.play === 'over') overCall(m, inn, ctx, wicket ? 'Wicket! ' : overDone ? 'New over. ' : '');
+  if (pendingRule) return; // the umpire rules first
+  progress(m, inn, { wicket, lastBowler: set.bowler_id, newRule, batterId: set.batter_id }, ctx);
 }
 
-function endInnings(m, inn, ctx) {
+// What happens after a reveal (or an umpire ruling): next batter, next bowler, innings end, session end.
+function progress(m, inn, { wicket, lastBowler, newRule, batterId }, ctx) {
+  const t = totals(inn.id);
+  const ended = (inn.target && t.runs >= inn.target) || t.wickets >= inn.max_wickets || t.balls >= inn.max_balls;
+  const overDone = t.balls % 6 === 0;
+  if (ended) endInnings(m, inn, ctx);
+  else {
+    const fresh = latestInnings(m.id);
+    if (wicket) {
+      const nb = pickStriker(m, fresh);
+      run('UPDATE innings SET striker_id = ? WHERE id = ?', nb, inn.id);
+      const left = 6 - (t.balls % 6);
+      announce(m.id, `${userName(nb)} walks out to bat${overDone ? '' : ` to face the last ${left} ball${left === 1 ? '' : 's'} of the over`}. ${inn.max_wickets - t.wickets} wicket${inn.max_wickets - t.wickets > 1 ? 's' : ''} left.`, { type: 'newbatter' });
+    }
+    if (overDone) {
+      const nextBowler = pickBowler(m, fresh, lastBowler);
+      run('UPDATE innings SET bowler_id = ? WHERE id = ?', nextBowler, inn.id);
+      announce(m.id, `End of over ${t.balls / 6}. ${teamName(m, inn.batting)} ${t.runs}/${t.wickets}. ${userName(nextBowler)} bowls next.`, { type: 'endover' });
+    }
+    if (newRule) {
+      const cur = latestInnings(m.id);
+      const body = `${userName(batterId)} must score within the first 2 legal balls of the next over.`;
+      for (const uid of new Set([batterId, cur.bowler_id, isUmpire(m, m.umpire_id) ? m.umpire_id : null].filter(Boolean)))
+        ctx.notify.push({ userId: uid, title: 'Scoring requirement active', body, kind: 'info' });
+    }
+    // Ball by ball, only call people when a new over or a new batter starts.
+    if (overDone || wicket || m.config.play === 'over') overCall(m, inn, ctx, wicket ? 'Wicket! ' : overDone ? 'New over. ' : '');
+  }
+  if (isTest(m.config)) sessionCheck(m, ctx);
+}
+
+function endInnings(m, inn, ctx, reason = null) {
+  if (isTest(m.config)) return endTestInnings(m, inn, ctx, reason);
   run(`UPDATE innings SET status = 'done', ended_at = ? WHERE id = ?`, now(), inn.id);
   const t = totals(inn.id);
   const n = inn.number;
@@ -500,10 +639,255 @@ function endInnings(m, inn, ctx) {
   finishMatch(m, result, ctx);
 }
 
+function endTestInnings(m, inn, ctx, reason) {
+  const t = totals(inn.id);
+  const why = reason || (inn.target && t.runs >= inn.target ? 'target' : t.wickets >= inn.max_wickets ? 'all_out' : 'ended');
+  run(`UPDATE innings SET status = 'done', ended_at = ?, end_reason = ? WHERE id = ?`, now(), why, inn.id);
+  // Any outstanding dot-over requirement ends with the innings.
+  run(`UPDATE dot_rules SET status = 'innings_end', resolved_at = ? WHERE innings_id = ? AND status IN ('active', 'pending')`, now(), inn.id);
+  const n = inn.number;
+  announce(m.id, `Innings over: ${teamName(m, inn.batting)} ${t.runs}/${t.wickets}${why === 'declared' ? ' declared' : why === 'all_out' ? ' all out' : ''} (${oversText(t.balls)} overs).`, { type: 'innings_end', number: n });
+  const auto = m.config.mode === 'auto';
+  const next = (k, opts = {}) => {
+    if (auto) return createTestInnings(m, k, ctx, opts);
+    run(`UPDATE matches SET status = 'innings_break' WHERE id = ?`, m.id);
+    announce(m.id, 'Innings break. Waiting for the umpire to start the next innings.', { type: 'break' });
+    ctx.notify.push({ userId: m.umpire_id, title: 'Innings break', body: 'Start the next innings when everyone is ready.', kind: 'umpire' });
+  };
+  const ipt = m.config.inningsPerTeam;
+  const last = ipt === 1 ? 2 : 4;
+  if (n === 1) return next(2);
+  if (n === 2 && ipt === 2) {
+    const fo = followOnPending(m);
+    if (fo) {
+      run(`UPDATE matches SET status = 'innings_break' WHERE id = ?`, m.id);
+      announce(m.id, `${teamName(m, fo.team)} lead by ${fo.lead}. Their captain can enforce the follow-on.`, { type: 'follow_on' });
+      ctx.notify.push({ userId: captainOf(m, fo.team), title: 'Follow-on?', body: `You lead by ${fo.lead}. Make them bat again, or bat yourselves.`, kind: 'bat' });
+      return;
+    }
+    return next(3);
+  }
+  if (n === 3) {
+    // Has the side that batted twice still not caught up? Then it's an innings win.
+    const twice = inn.batting, once = other(twice);
+    const diff = teamTotal(m.id, once) - teamTotal(m.id, twice);
+    if (diff > 0) return finishMatch(m, { winner: once, tie: false, text: `${teamName(m, once)} won by an innings and ${diff} run${diff === 1 ? '' : 's'}.`, reason: 'innings' }, ctx);
+    return next(4);
+  }
+  if (n === last) {
+    const chasing = inn.batting, defending = other(chasing);
+    const a = teamTotal(m.id, defending), b = teamTotal(m.id, chasing);
+    let result;
+    if (b > a) { const left = inn.max_wickets - t.wickets; result = { winner: chasing, tie: false, text: `${teamName(m, chasing)} won by ${left} wicket${left === 1 ? '' : 's'}.`, reason: 'chase' }; }
+    else if (b === a) result = { winner: null, tie: true, text: 'Match tied.', reason: 'tie' };
+    else result = { winner: defending, tie: false, text: `${teamName(m, defending)} won by ${a - b} run${a - b === 1 ? '' : 's'}.`, reason: 'defended' };
+    return finishMatch(m, result, ctx);
+  }
+  return next(n + 1);
+}
+
+// ---------- Test match sessions ----------
+export const sessionIdx = (m) => ((m.test_day || 1) - 1) * m.config.sessionsPerDay + (m.test_session || 1);
+const sessionBalls = (m) => get(`SELECT COUNT(*) AS n FROM balls b JOIN innings i ON i.id = b.innings_id
+  WHERE i.match_id = ? AND b.voided = 0 AND b.session_idx = ?`, m.id, sessionIdx(m)).n;
+const sessionQuota = (m) => m.config.oversPerSession * 6;
+const breakName = (m, dayEnd) => dayEnd ? (m.config.stumps ? 'Stumps' : 'End of the day')
+  : m.test_session === 1 && m.config.lunch ? 'Lunch' : m.test_session === 2 && m.config.tea ? 'Tea' : 'Session break';
+
+function startSessionRow(m, day, num) {
+  const idx = (day - 1) * m.config.sessionsPerDay + num;
+  run('UPDATE matches SET test_day = ?, test_session = ?, session_started_at = ?, break_request = NULL WHERE id = ?', day, num, now(), m.id);
+  run('INSERT OR IGNORE INTO match_sessions (match_id, idx, day, num, started_at) VALUES (?,?,?,?,?)', m.id, idx, day, num, now());
+}
+
+function sessionCheck(mIn, ctx) {
+  const m = loadMatch(mIn.id);
+  if (!isTest(m.config) || !['live', 'innings_break'].includes(m.status)) return;
+  if (sessionBalls(m) < sessionQuota(m)) return;
+  endSession(m, ctx, 'overs', null);
+}
+
+function endSession(m, ctx, reason, byUser) {
+  const idx = sessionIdx(m);
+  const spd = m.config.sessionsPerDay;
+  const dayEnd = m.test_session >= spd;
+  const lastOfMatch = idx >= m.config.days * spd;
+  run('UPDATE match_sessions SET ended_at = ?, end_reason = ?, ended_by = ? WHERE match_id = ? AND idx = ?', now(), reason, byUser, m.id, idx);
+  run('UPDATE matches SET break_request = NULL WHERE id = ?', m.id);
+  // A session ending means nobody should be told to bowl or bat right now.
+  for (let i = ctx.notify.length - 1; i >= 0; i--) if (ctx.notify[i].kind === 'bat' || ctx.notify[i].kind === 'bowl') ctx.notify.splice(i, 1);
+  const s = sessionSummary(m, idx);
+  const line = `Day ${m.test_day}, session ${m.test_session}: ${s.runs} run${s.runs === 1 ? '' : 's'}, ${s.wickets} wicket${s.wickets === 1 ? '' : 's'} in ${oversText(s.balls)} overs.`;
+  if (lastOfMatch) {
+    announce(m.id, `${line} That's the end of day ${m.test_day}, the last scheduled day.`, { type: 'session_end' });
+    return finishMatch(m, { winner: null, tie: false, draw: true, text: 'Match drawn: the scheduled days are over.', reason: 'time' }, ctx);
+  }
+  const name = breakName(m, dayEnd);
+  const pause = reason !== 'overs' || (dayEnd ? m.config.stumps : m.test_session === 1 ? m.config.lunch : m.test_session === 2 ? m.config.tea : true);
+  const by = reason === 'manual' ? ` (ended early by ${userName(byUser)})` : reason === 'requested' ? ' (break requested by a captain)' : '';
+  record(m.id, byUser || m.umpire_id, 'session_end', `${dayEnd ? '🌙' : '☕'} ${name}${by}. ${line}`, { idx, reason });
+  ctx.fx.push({ type: 'session', name, day: m.test_day, session: m.test_session, dayEnd });
+  if (!pause) {
+    // This break is switched off in the match settings: roll straight into the next session.
+    const day = dayEnd ? m.test_day + 1 : m.test_day, num = dayEnd ? 1 : m.test_session + 1;
+    startSessionRow(m, day, num);
+    announce(m.id, `No break: day ${day}, session ${num} starts straight away.`, { type: 'session_start' });
+    return;
+  }
+  run('UPDATE matches SET status = ? WHERE id = ?', dayEnd ? 'day_break' : 'session_break', m.id);
+  for (const p of all('SELECT user_id FROM members WHERE match_id = ? AND banned = 0 AND team IS NOT NULL', m.id))
+    ctx.notify.push({ userId: p.user_id, title: `${name}`, body: `${line} The match is saved. Play continues when the next session starts.`, kind: 'info' });
+}
+
+// After a break or suspension: is there an innings to carry on, or does one need starting?
+function statusAfterBreak(m) {
+  const inn = latestInnings(m.id);
+  return inn && inn.status === 'live' ? 'live' : 'innings_break';
+}
+
+export function testAction(userId, matchId, a, ctx) {
+  return tx(() => {
+    const m = loadMatch(matchId);
+    const ump = isUmpire(m, userId), host = isHost(m, userId);
+    const cap = ['A', 'B'].find((t) => captainOf(m, t) === userId);
+    const admin = m.config.mode === 'umpire' ? ump : host; // who runs sessions
+    const inn = latestInnings(matchId);
+    switch (a.type) {
+      case 'suspend': {
+        if (!host) fail(m.config.mode === 'umpire' ? 'Only the umpire can suspend the match.' : 'Only the match host can suspend the match.');
+        if (!['live', 'session_break', 'day_break', 'innings_break'].includes(m.status)) fail('The match can only be suspended while it is in progress.');
+        const reason = String(a.reason || '').slice(0, 140);
+        run('INSERT INTO suspensions (match_id, suspended_by, suspended_at, reason, status_before, day, session) VALUES (?,?,?,?,?,?,?)',
+          matchId, userId, now(), reason || null, m.status, m.test_day, m.test_session);
+        run(`UPDATE matches SET status = 'suspended' WHERE id = ?`, matchId);
+        const t = inn ? totals(inn.id) : null;
+        record(matchId, userId, 'suspend', `⏸ Match suspended and saved${reason ? ` (${reason})` : ''}.${t ? ` ${teamName(m, inn.batting)} ${t.runs}/${t.wickets} after ${oversText(t.balls)} overs.` : ''} The same link carries on when it resumes.`);
+        for (const p of all('SELECT user_id FROM members WHERE match_id = ? AND banned = 0', matchId))
+          if (p.user_id !== userId) ctx.notify.push({ userId: p.user_id, title: 'Match suspended', body: 'Progress is saved. You will be notified when it resumes.', kind: 'info' });
+        break;
+      }
+      case 'resume': {
+        if (!host) fail(m.config.mode === 'umpire' ? 'Only the umpire can resume the match.' : 'Only the match host can resume the match.');
+        if (m.status !== 'suspended') fail('The match is not suspended.');
+        const s = get('SELECT * FROM suspensions WHERE match_id = ? AND resumed_at IS NULL ORDER BY id DESC LIMIT 1', matchId);
+        const back = s?.status_before || statusAfterBreak(m);
+        run('UPDATE suspensions SET resumed_by = ?, resumed_at = ? WHERE id = ?', userId, now(), s?.id ?? -1);
+        run('UPDATE matches SET status = ?, resumed_at = ? WHERE id = ?', back, now(), matchId);
+        const t = inn ? totals(inn.id) : null;
+        const where = isTest(m.config) ? `Day ${m.test_day}, session ${m.test_session}` : 'The match';
+        record(matchId, userId, 'resume', `▶ Match resumed. ${where}${t && inn.status === 'live' ? `, ${teamName(m, inn.batting)} ${t.runs}/${t.wickets}, next ball ${ballLabel(t.balls + 1)}` : ''}.${back === 'session_break' || back === 'day_break' ? ' Still at the break: start the next session to play on.' : ''}`);
+        for (const p of all('SELECT user_id FROM members WHERE match_id = ? AND banned = 0', matchId))
+          if (p.user_id !== userId) ctx.notify.push({ userId: p.user_id, title: 'Match resumed', body: 'Pick up where you left off.', kind: 'info' });
+        if (back === 'live') overCall(m, inn, ctx, 'Resumed. ');
+        break;
+      }
+      case 'next_session': {
+        if (!isTest(m.config)) fail('Sessions are only used in Test matches.');
+        if (!(admin || (m.config.mode === 'auto' && cap))) fail(m.config.mode === 'umpire' ? 'Only the umpire can start the next session.' : 'Only the host or a captain can start the next session.');
+        if (m.status !== 'session_break' && m.status !== 'day_break') fail('There is no break to end.');
+        const dayEnd = m.status === 'day_break';
+        const day = dayEnd ? m.test_day + 1 : m.test_day, num = dayEnd ? 1 : m.test_session + 1;
+        startSessionRow(m, day, num);
+        const back = statusAfterBreak(m);
+        run('UPDATE matches SET status = ? WHERE id = ?', back, matchId);
+        record(matchId, userId, 'session_start', `▶ Day ${day}, session ${num} is underway.`);
+        for (const p of all('SELECT user_id FROM members WHERE match_id = ? AND banned = 0 AND team IS NOT NULL', matchId))
+          ctx.notify.push({ userId: p.user_id, title: `Day ${day}, session ${num}`, body: 'Play has restarted.', kind: 'info' });
+        if (back === 'live') overCall(loadMatch(matchId), inn, ctx);
+        break;
+      }
+      case 'end_session': {
+        if (!isTest(m.config)) fail('Sessions are only used in Test matches.');
+        if (!admin) fail(m.config.mode === 'umpire' ? 'Only the umpire can end a session.' : 'Only the match host can end a session.');
+        if (m.status !== 'live' && m.status !== 'innings_break') fail('No session is in progress.');
+        endSession(m, ctx, a.requested ? 'requested' : 'manual', userId);
+        break;
+      }
+      case 'request_break': {
+        if (!isTest(m.config)) fail('Sessions are only used in Test matches.');
+        if (!cap) fail('Only a captain can ask for a session break.');
+        if (m.status !== 'live') fail('Play is not in progress.');
+        run('UPDATE matches SET break_request = ? WHERE id = ?', cap, matchId);
+        record(matchId, userId, 'request_break', `${teamName(m, cap)}'s captain asked for a session break.`);
+        ctx.notify.push({ userId: m.umpire_id, title: 'Session break requested', body: `${teamName(m, cap)}'s captain is asking to end the session.`, kind: 'umpire' });
+        break;
+      }
+      case 'decline_break': {
+        if (!admin) fail('Only the umpire or host can answer a break request.');
+        if (!m.break_request) fail('No break has been requested.');
+        run('UPDATE matches SET break_request = NULL WHERE id = ?', matchId);
+        record(matchId, userId, 'decline_break', 'The session break request was declined. Play on.');
+        break;
+      }
+      case 'declare': {
+        if (!isTest(m.config)) fail('Declarations are only for Test matches.');
+        if (m.status !== 'live' || !inn || inn.status !== 'live') fail('No innings in progress.');
+        if (!(captainOf(m, inn.batting) === userId || ump)) fail(`Only ${teamName(m, inn.batting)}'s captain${m.config.mode === 'umpire' ? ' or the umpire' : ''} can declare.`);
+        if (openSet(inn.id)) fail('Wait until the current submission is revealed, then declare.');
+        run('UPDATE innings SET declared = 1 WHERE id = ?', inn.id);
+        record(matchId, userId, 'declare', `📣 ${teamName(m, inn.batting)} declare at ${totals(inn.id).runs}/${totals(inn.id).wickets}.`);
+        endTestInnings(m, inn, ctx, 'declared');
+        sessionCheck(m, ctx);
+        break;
+      }
+      case 'follow_on': {
+        const fo = followOnPending(m);
+        if (!fo || m.status !== 'innings_break') fail('There is no follow-on decision to make.');
+        if (!(captainOf(m, fo.team) === userId || ump)) fail(`Only ${teamName(m, fo.team)}'s captain decides the follow-on.`);
+        const enforce = !!a.enforce;
+        run(`UPDATE matches SET status = 'live' WHERE id = ?`, matchId);
+        record(matchId, userId, 'follow_on', enforce
+          ? `${teamName(m, fo.team)} enforce the follow-on: ${teamName(m, other(fo.team))} bat again.`
+          : `${teamName(m, fo.team)} decline the follow-on and bat again themselves.`);
+        createTestInnings(loadMatch(matchId), 3, ctx, { followOn: enforce });
+        break;
+      }
+      case 'rule': {
+        if (!ump) fail('Only the umpire rules on the dot-over requirement.');
+        const req = inn && get(`SELECT * FROM dot_rules WHERE innings_id = ? AND status = 'pending'`, inn.id);
+        if (!req) fail('There is nothing to rule on.');
+        const lastBall = get('SELECT * FROM balls WHERE innings_id = ? AND batter_id = ? AND voided = 0 ORDER BY ball_no DESC LIMIT 1', inn.id, req.batter_id);
+        if (a.decision === 'out') {
+          run(`UPDATE balls SET is_wicket = 1, dismissal = 'dot_rule' WHERE id = ?`, lastBall.id);
+          resolveRule(req.id, 'violated', 'Given out by the umpire');
+          record(matchId, userId, 'rule_out', `❌ Umpire's ruling: ${userName(req.batter_id)} is out under the dot-over rule.`);
+          progress(m, inn, { wicket: true, lastBowler: lastBall.bowler_id }, ctx);
+        } else if (a.decision === 'waive') {
+          resolveRule(req.id, 'waived', 'Waived by the umpire');
+          record(matchId, userId, 'rule_waive', `Umpire's ruling: the dot-over requirement for ${userName(req.batter_id)} is waived. Play on.`);
+          progress(m, inn, { wicket: false, lastBowler: lastBall.bowler_id }, ctx);
+        } else fail('Rule out or waive.');
+        break;
+      }
+      default: fail('Unknown action.');
+    }
+  });
+}
+
+function sessionSummary(m, idx) {
+  const rows = all(`SELECT b.*, i.batting, i.number AS inn FROM balls b JOIN innings i ON i.id = b.innings_id
+    WHERE i.match_id = ? AND b.voided = 0 AND b.session_idx = ? ORDER BY b.id`, m.id, idx);
+  const sum = { runs: 0, wickets: 0, balls: rows.length, innings: [], batters: [], bowlers: [] };
+  const inns = new Map(), bat = new Map(), bowl = new Map();
+  for (const b of rows) {
+    sum.runs += b.runs; sum.wickets += b.is_wicket;
+    const x = inns.get(b.inn) || { number: b.inn, battingName: teamName(m, b.batting), bowlingName: teamName(m, other(b.batting)), runs: 0, wickets: 0, balls: 0 };
+    x.runs += b.runs; x.wickets += b.is_wicket; x.balls += 1; inns.set(b.inn, x);
+    const y = bat.get(b.batter_id) || { id: b.batter_id, name: userName(b.batter_id), runs: 0, balls: 0, outs: 0 };
+    y.runs += b.runs; y.balls += 1; y.outs += b.is_wicket; bat.set(b.batter_id, y);
+    const z = bowl.get(b.bowler_id) || { id: b.bowler_id, name: userName(b.bowler_id), runs: 0, balls: 0, wickets: 0 };
+    z.runs += b.runs; z.balls += 1; z.wickets += b.is_wicket && b.dismissal !== 'dot_rule' ? 1 : 0; bowl.set(b.bowler_id, z);
+  }
+  sum.innings = [...inns.values()]; sum.batters = [...bat.values()]; sum.bowlers = [...bowl.values()];
+  return sum;
+}
+
 function finishMatch(m, result, ctx, status = 'completed') {
   run(`UPDATE matches SET status = ?, result = ?, ended_at = ? WHERE id = ?`, status, JSON.stringify(result), now(), m.id);
   run(`UPDATE sets SET status = 'cancelled' WHERE status = 'open' AND innings_id IN (SELECT id FROM innings WHERE match_id = ?)`, m.id);
   run(`UPDATE innings SET status = 'done', ended_at = COALESCE(ended_at, ?) WHERE match_id = ?`, now(), m.id);
+  run(`UPDATE dot_rules SET status = 'innings_end', resolved_at = ? WHERE match_id = ? AND status IN ('active', 'pending')`, now(), m.id);
+  if (isTest(m.config)) run('UPDATE match_sessions SET ended_at = COALESCE(ended_at, ?), end_reason = COALESCE(end_reason, ?) WHERE match_id = ?', now(), 'match_over', m.id);
   announce(m.id, `🏆 ${result.text} Stats have been saved to every player's profile.`, { type: 'result' });
   ctx.fx.push({ type: 'result', text: result.text });
   for (const p of all('SELECT user_id FROM members WHERE match_id = ? AND banned = 0', m.id))
@@ -672,7 +1056,11 @@ export function umpireAction(userId, matchId, a, ctx) {
         if (!set) fail('No over to void in this innings.');
         const reason = String(a.reason || '').slice(0, 140) || 'Umpire correction';
         run(`UPDATE sets SET status = 'cancelled' WHERE innings_id = ? AND status = 'open'`, inn.id);
+        const firstVoid = get('SELECT MIN(created_at) AS t FROM balls WHERE set_id = ? AND voided = 0', set.id).t;
         run('UPDATE balls SET voided = 1 WHERE set_id = ?', set.id);
+        // Undo any dot-over requirement the voided balls created or settled.
+        run('DELETE FROM dot_rules WHERE innings_id = ? AND created_at >= ?', inn.id, firstVoid);
+        run(`UPDATE dot_rules SET status = 'active', resolved_at = NULL WHERE innings_id = ? AND resolved_at >= ? AND status <> 'innings_end'`, inn.id, firstVoid);
         run(`UPDATE sets SET end_reason = 'voided' WHERE id = ?`, set.id);
         run(`UPDATE innings SET status = 'live', ended_at = NULL, striker_id = ?, bowler_id = ? WHERE id = ?`, set.batter_id, set.bowler_id, inn.id);
         run(`UPDATE matches SET status = 'live' WHERE id = ?`, matchId);
@@ -700,10 +1088,12 @@ export function umpireAction(userId, matchId, a, ctx) {
         if (m.config.mode === 'umpire') needUmpire(); else needHost();
         if (m.status === 'completed' || m.status === 'abandoned') fail('This match has finished.');
         if (m.status === 'lobby' && a.outcome !== 'abandon') fail('The match has not started.');
+        if (a.outcome === 'draw' && !isTest(m.config)) fail('Only Test matches can be drawn.');
         const reason = String(a.reason || '').slice(0, 140);
         let result;
         if (a.outcome === 'A' || a.outcome === 'B') result = { winner: a.outcome, tie: false, text: `${teamName(m, a.outcome)} won (${ump ? "umpire's decision" : 'declared by the host'}${reason ? `: ${reason}` : ''}).` };
         else if (a.outcome === 'tie') result = { winner: null, tie: true, text: `Match declared a tie${reason ? ` (${reason})` : ''}.` };
+        else if (a.outcome === 'draw') result = { winner: null, tie: false, draw: true, text: `Match drawn${reason ? ` (${reason})` : ''}.`, reason: 'declared_draw' };
         else result = { winner: null, tie: false, abandoned: true, text: `Match abandoned${reason ? ` (${reason})` : ''}.` };
         record(matchId, userId, 'end_match', `Match ended early: ${result.text}`, { outcome: a.outcome, reason }, false);
         finishMatch(m, result, ctx, result.abandoned ? 'abandoned' : 'completed');
@@ -806,7 +1196,8 @@ function scorecard(m, inn) {
   const batting = all(`SELECT b.batter_id AS id, u.display_name AS name, SUM(runs) AS runs, COUNT(*) AS balls,
       SUM(CASE WHEN runs = 4 THEN 1 ELSE 0 END) AS fours, SUM(CASE WHEN runs = 6 THEN 1 ELSE 0 END) AS sixes, SUM(is_wicket) AS outs
     FROM balls b JOIN users u ON u.id = b.batter_id WHERE innings_id = ? AND voided = 0 GROUP BY b.batter_id ORDER BY MIN(b.ball_no)`, inn.id);
-  const bowling = all(`SELECT b.bowler_id AS id, u.display_name AS name, COUNT(*) AS balls, SUM(runs) AS runs, SUM(is_wicket) AS wickets,
+  const bowling = all(`SELECT b.bowler_id AS id, u.display_name AS name, COUNT(*) AS balls, SUM(runs) AS runs,
+      SUM(CASE WHEN is_wicket = 1 AND COALESCE(dismissal, '') <> 'dot_rule' THEN 1 ELSE 0 END) AS wickets,
       COUNT(DISTINCT set_id) AS overs
     FROM balls b JOIN users u ON u.id = b.bowler_id WHERE innings_id = ? AND voided = 0 GROUP BY b.bowler_id ORDER BY MIN(b.ball_no)`, inn.id);
   const overs = all(`SELECT s.id, s.bowler_id, s.batter_id, s.end_reason, COUNT(b.id) AS balls, COALESCE(SUM(b.runs),0) AS runs, COALESCE(SUM(b.is_wicket),0) AS wickets
@@ -875,6 +1266,46 @@ export function publicState(matchId) {
       runRate: rr.toFixed(2), need, ballsLeft: left,
       requiredRate: need != null && left > 0 ? ((need * 6) / left).toFixed(2) : null,
       dismissed: Object.fromEntries(dismissals(inn.id)),
+      // Numbers the bowler has already used this over (limited overs: max 3 of each).
+      bowledThisOver: bowledThisOver(inn),
+    };
+  }
+  let test = null;
+  if (isTest(m.config)) {
+    const reqs = inn ? all(`SELECT * FROM dot_rules WHERE innings_id = ? AND status IN ('active', 'pending')`, inn.id) : [];
+    const tb = inn ? totals(inn.id).balls : 0;
+    const sessions = all('SELECT * FROM match_sessions WHERE match_id = ? ORDER BY idx', m.id).map((r) => ({
+      idx: r.idx, day: r.day, num: r.num, startedAt: r.started_at, endedAt: r.ended_at, endReason: r.end_reason, ...sessionSummary(m, r.idx),
+    }));
+    const days = [];
+    for (const x of sessions) {
+      const d = days.find((y) => y.day === x.day) || (days.push({ day: x.day, runs: 0, wickets: 0, balls: 0, sessions: 0 }), days[days.length - 1]);
+      d.runs += x.runs; d.wickets += x.wickets; d.balls += x.balls; d.sessions += 1;
+    }
+    const sb = m.test_day ? sessionBalls(m) : 0;
+    const totalA = teamTotal(m.id, 'A'), totalB = teamTotal(m.id, 'B');
+    let situation = null;
+    if (inn && inn.target && inn.status === 'live') {
+      const need = inn.target - totals(inn.id).runs;
+      situation = `${teamName(m, inn.batting)} need ${need} to win`;
+    } else if (inn && inn.number > 1) {
+      const diff = teamTotal(m.id, inn.batting) - teamTotal(m.id, other(inn.batting));
+      situation = diff === 0 ? 'Scores level' : `${teamName(m, inn.batting)} ${diff > 0 ? 'lead' : 'trail'} by ${Math.abs(diff)}`;
+    }
+    test = {
+      day: m.test_day, session: m.test_session, days: m.config.days, sessionsPerDay: m.config.sessionsPerDay,
+      oversPerSession: m.config.oversPerSession, sessionBalls: sb, sessionBallsLeft: sessionQuota(m) - sb,
+      sessionStartedAt: m.session_started_at, sessionMinutes: m.config.sessionMinutes,
+      breakRequest: m.break_request, resumedAt: m.resumed_at, totals: { A: totalA, B: totalB }, situation,
+      followOn: m.status === 'innings_break' ? followOnPending(m) : null, followOnMargin: followOnMargin(m.config),
+      requirements: reqs.map((r) => ({
+        id: r.id, batterId: r.batter_id, name: userName(r.batter_id), status: r.status,
+        ballsLeft: Math.floor(tb / 6) === r.over_idx ? Math.max(0, 2 - (tb % 6)) : 2, startsNextOver: Math.floor(tb / 6) < r.over_idx,
+      })),
+      sessions, daySummaries: days,
+      suspensions: all('SELECT * FROM suspensions WHERE match_id = ? ORDER BY id DESC LIMIT 20', m.id).map((x) => ({
+        at: x.suspended_at, by: userName(x.suspended_by), reason: x.reason, resumedAt: x.resumed_at, resumedBy: x.resumed_by ? userName(x.resumed_by) : null, day: x.day, session: x.session,
+      })),
     };
   }
   const commentary = all(`SELECT b.*, i.number AS inn, bu.display_name AS batter, bo.display_name AS bowler
@@ -892,9 +1323,13 @@ export function publicState(matchId) {
     else if (!m.toss_decision) stage = 'toss_decision';
     else stage = 'ready_to_start';
   }
+  if (stage === 'live' && m.resumed_at && m.resumed_at > Date.now() - 10 * 60 * 1000) {
+    const since = get(`SELECT 1 FROM balls b JOIN innings i ON i.id = b.innings_id WHERE i.match_id = ? AND b.created_at > ? LIMIT 1`, m.id, m.resumed_at);
+    if (!since) stage = 'resumed';
+  }
   return {
     id: m.id, name: m.name, status: m.status, stage, paused: !!m.paused, config: m.config, tossBat: m.toss_bat,
-    mode: m.config.mode, play: m.config.play,
+    mode: m.config.mode, play: m.config.play, format: m.config.format, test,
     lineups: { A: { confirmedAt: m.confirm_a || null }, B: { confirmedAt: m.confirm_b || null } },
     toss: { caller: m.toss_caller, call: m.toss_call, result: m.toss_result, winner: m.toss_winner, decision: m.toss_decision, at: m.toss_at },
     host: { id: m.umpire_id, name: userName(m.umpire_id) },

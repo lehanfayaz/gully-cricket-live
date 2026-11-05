@@ -153,7 +153,54 @@ addColumn('matches', 'toss_call', 'TEXT');                         // 'heads' | 
 addColumn('matches', 'toss_result', 'TEXT');                       // 'heads' | 'tails'
 addColumn('matches', 'toss_winner', 'TEXT');                       // 'A' | 'B'
 addColumn('matches', 'toss_decision', 'TEXT');                     // 'bat' | 'bowl'
-addColumn('matches', 'toss_at', 'INTEGER');                                 // readable line for match history
+addColumn('matches', 'toss_at', 'INTEGER');
+// Test matches: days, sessions, suspension, declarations, follow-on, dot-over rule
+addColumn('matches', 'test_day', 'INTEGER');                       // current day (1-based)
+addColumn('matches', 'test_session', 'INTEGER');                   // current session within the day (1-based)
+addColumn('matches', 'session_started_at', 'INTEGER');
+addColumn('matches', 'break_request', 'TEXT');                     // team whose captain asked for a session break
+addColumn('matches', 'resumed_at', 'INTEGER');
+addColumn('innings', 'follow_on', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('innings', 'declared', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('innings', 'end_reason', 'TEXT');
+addColumn('balls', 'session_idx', 'INTEGER');                       // which session (Tests) the ball was bowled in
+addColumn('balls', 'dismissal', 'TEXT');                            // NULL/'matched' or 'dot_rule'
+db.exec(`
+CREATE TABLE IF NOT EXISTS match_sessions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id TEXT NOT NULL REFERENCES matches(id),
+  idx INTEGER NOT NULL,                       -- 1, 2, 3 … across the whole match
+  day INTEGER NOT NULL,
+  num INTEGER NOT NULL,                       -- session number within the day
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  end_reason TEXT,                            -- overs | manual | requested | match_over
+  ended_by TEXT,
+  UNIQUE (match_id, idx)
+);
+CREATE TABLE IF NOT EXISTS suspensions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id TEXT NOT NULL REFERENCES matches(id),
+  suspended_by TEXT NOT NULL,
+  suspended_at INTEGER NOT NULL,
+  reason TEXT,
+  status_before TEXT NOT NULL,                -- restored exactly on resume
+  day INTEGER, session INTEGER,
+  resumed_by TEXT,
+  resumed_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS dot_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id TEXT NOT NULL REFERENCES matches(id),
+  innings_id INTEGER NOT NULL REFERENCES innings(id),
+  batter_id TEXT NOT NULL,
+  over_idx INTEGER NOT NULL,                  -- the over (0-based in the innings) where they must score
+  status TEXT NOT NULL DEFAULT 'active',      -- active | met | dismissed | innings_end | pending | violated | waived
+  created_at INTEGER NOT NULL,
+  resolved_at INTEGER,
+  note TEXT
+);
+`);                                 // readable line for match history
 
 const cache = new Map();
 const stmt = (sql) => {

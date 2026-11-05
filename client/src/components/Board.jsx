@@ -26,7 +26,7 @@ export function ScoreBug({ state, online }) {
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs font-semibold text-chalk-dim">
               {live && <span className="h-2 w-2 animate-pulse rounded-full bg-leather" aria-hidden />}
-              <span className="truncate">{inn.superOver ? 'Super over' : inn.number === 1 ? '1st innings' : '2nd innings'}{state.paused ? ', paused' : ''}</span>
+              <span className="truncate">{state.format === 'test' && state.test ? `Day ${state.test.day}, session ${state.test.session}, innings ${inn.number}` : inn.superOver ? 'Super over' : inn.number === 1 ? '1st innings' : '2nd innings'}{state.paused ? ', paused' : ''}{state.status === 'suspended' ? ', suspended' : ''}</span>
             </div>
             <div className="truncate font-display text-xl font-bold leading-tight">{inn.battingName}</div>
           </div>
@@ -36,7 +36,7 @@ export function ScoreBug({ state, online }) {
         </div>
         <div className="flex w-20 flex-col items-center justify-center bg-flood text-pitch-900">
           <div className="font-display text-3xl font-extrabold leading-none tabular-nums">{inn.overs}</div>
-          <div className="text-xs font-semibold">of {inn.maxBalls / 6} ov</div>
+          <div className="text-xs font-semibold">{state.format === 'test' ? 'overs' : `of ${inn.maxBalls / 6} ov`}</div>
         </div>
       </div>
       <div className="flex items-center gap-3 bg-pitch-700/90 px-4 py-1.5 text-sm">
@@ -48,7 +48,13 @@ export function ScoreBug({ state, online }) {
         ) : <span className="text-chalk-dim">Run rate {cur?.runRate}</span>}
         <span className="ml-auto"><Online n={online} /></span>
       </div>
-      {inn.target && state.status === 'live' && (
+      {state.format === 'test' && state.test?.situation && state.status === 'live' && !inn.target && (
+        <div className="bg-pitch-600 px-4 py-1 text-sm font-semibold">{state.test.situation}</div>
+      )}
+      {inn.target && state.status === 'live' && state.format === 'test' && (
+        <div className="bg-leather px-4 py-1 text-sm font-semibold">Need {cur.need} to win</div>
+      )}
+      {inn.target && state.status === 'live' && state.format !== 'test' && (
         <div className="bg-leather px-4 py-1 text-sm font-semibold">
           Need {cur.need} from {cur.ballsLeft} ball{cur.ballsLeft === 1 ? '' : 's'}{cur.requiredRate ? `, required rate ${cur.requiredRate}` : ''}
         </div>

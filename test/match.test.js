@@ -121,7 +121,10 @@ assert.notEqual(st.current.bowlerId, id(b1), 'new over, new bowler');
 assert.equal(st.current.cap, 6, 'back to six for a new over');
 const bowlCap = byId[st.captains[tossWinner]];
 await bowlCap.bad('captain', { action: { type: 'next_bowler', team: tossWinner, userId: id(b1) } }, /two in a row/);
-await bowler().ok('over:submit', { sequence: [1, 1, 1, 1, 1, 1] });
+// Limited-overs bowler limit: no number more than three times in an over.
+for (const bad of [[6, 6, 5, 5, 5, 5], [1, 1, 1, 1, 2, 3], [5, 5, 5, 5, 1, 2]]) await bowler().bad('over:submit', { sequence: bad }, /at most 3 times/);
+await bowler().bad('over:submit', { sequence: [0, 0, 0, 1, 2, 3] }, /isn't allowed/);
+await bowler().ok('over:submit', { sequence: [5, 5, 5, 1, 2, 3] });
 await batter().ok('over:submit', { sequence: [6, 6, 6, 6, 6, 6] });
 await settle();
 st = fan.last();
@@ -130,7 +133,7 @@ assert.equal(st.innings[0].runs, 51); assert.equal(st.innings[1].target, 52);
 // Second innings: three quick wickets; each new batter needs one fewer number.
 for (const want of [6, 5, 4]) {
   assert.equal(fan.last().current.cap, want);
-  await bowler().ok('over:submit', { sequence: Array(want).fill(1) });
+  await bowler().ok('over:submit', { sequence: [1, 2, 2, 3, 3, 4].slice(0, want) });
   await batter().ok('over:submit', { sequence: Array(want).fill(1) });
   await settle();
 }
@@ -167,7 +170,10 @@ await batter().ok('over:submit', { sequence: [4] });
 await settle();
 st = fan.last();
 assert.equal(st.innings[0].runs, 4); assert.equal(st.current.ballsLeftInOver, 5); assert.equal(st.current.over.balls.length, 1);
-for (let k = 0; k < 4; k++) { await bowler().ok('over:submit', { sequence: [1] }); await batter().ok('over:submit', { sequence: [2] }); }
+for (let k = 0; k < 3; k++) { await bowler().ok('over:submit', { sequence: [1] }); await batter().ok('over:submit', { sequence: [2] }); }
+// Ball by ball, the limit is tracked across the over: a fourth 1 is refused.
+await bowler().bad('over:submit', { sequence: [1] }, /at most 3 times.*3 already bowled/);
+await bowler().ok('over:submit', { sequence: [4] }); await batter().ok('over:submit', { sequence: [2] });
 await settle();
 assert.equal(fan.last().current.ballsLeftInOver, 1);
 await ump.ok('umpire', { action: { type: 'void', reason: 'Test correction' } });

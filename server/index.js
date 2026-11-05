@@ -224,6 +224,7 @@ io.on('connection', (socket) => {
   socket.on('team:join', handle((id, p, ctx) => G.joinTeam(user.id, id, p.team, ctx)));
   socket.on('lineup:confirm', handle((id, p, ctx) => G.confirmLineup(user.id, id, p.team, ctx)));
   socket.on('toss:call', handle((id, p, ctx) => G.callToss(user.id, id, p.call, ctx)));
+  socket.on('test', handle((id, p, ctx) => G.testAction(user.id, id, p.action || {}, ctx)));
   socket.on('toss:decide', handle((id, p, ctx) => G.decideToss(user.id, id, p.decision, ctx)));
   socket.on('umpire', handle((id, p, ctx) => {
     G.umpireAction(user.id, id, p.action || {}, ctx);

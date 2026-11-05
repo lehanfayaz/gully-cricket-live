@@ -77,6 +77,7 @@ export default function UmpirePanel({ state, priv }) {
               <option value="A">{state.teams.A.name} win</option>
               <option value="B">{state.teams.B.name} win</option>
               <option value="tie">Declare a tie</option>
+              {state.format === 'test' && <option value="draw">Declare a draw</option>}
               <option value="abandon">Abandon (no result)</option>
             </select>
             <button className="btn-danger shrink-0" onClick={() => (armed ? act({ type: 'end', outcome, reason }) : setArmed(true))}>{armed ? 'Tap to confirm' : 'End match'}</button>

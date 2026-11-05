@@ -22,7 +22,7 @@ export default function Profile() {
     ['Runs', b.runs], ['Highest', `${b.highest}${b.highestNotOut ? '*' : ''}`], ['Average', b.average ?? '-'], ['Strike rate', b.strikeRate ?? '-'],
   ];
   const small = [
-    ['Matches', r.matches], ['Won', r.wins], ['Lost', r.losses], ['Tied', r.ties],
+    ['Matches', r.matches], ['Won', r.wins], ['Lost', r.losses], ['Tied', r.ties], ['Drawn', r.draws || 0],
     ['Balls faced', b.balls], ['Times out', b.outs], ['Fours', b.fours], ['Sixes', b.sixes], ['Ducks', b.ducks],
     ['Wickets taken', w.wickets], ['Balls bowled', w.balls], ['Economy', w.economy ?? '-'],
   ];

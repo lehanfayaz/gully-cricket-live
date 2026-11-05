@@ -74,7 +74,7 @@ function Live({ id, me }) {
   const myTurn = !!cur && state.status === 'live' && !state.paused &&
     ((cur.phase === 'awaiting_sequence' && cur.bowlerId === me) || (cur.phase === 'awaiting_shot' && cur.set?.batterId === me));
   useEffect(() => {
-    document.title = myTurn ? '🏏 Your turn! Gully Cricket Live' : state ? `${state.name}: Gully Cricket Live` : 'Gully Cricket Live';
+    document.title = myTurn ? '🏏 Your turn! FOOTY CRICKET LEAGUE' : state ? `${state.name}: FOOTY CRICKET LEAGUE` : 'FOOTY CRICKET LEAGUE';
   }, [myTurn, state?.name]);
   useEffect(() => { if (myTurn) setTab('play'); }, [myTurn]);
 

@@ -135,7 +135,7 @@ function Live({ id, me }) {
           <div className="space-y-3 p-3 lg:p-0 lg:pt-3">
             {tab === 'play' && <PlayTab state={state} priv={priv} me={me} isUmp={isUmp} online={online} openLineups={() => setTab('lineups')} />}
             {tab === 'lineups' && <Lineups state={state} priv={priv} me={me} />}
-            {tab === 'card' && <><Scorecards state={state} /><SessionHistory state={state} /></>}
+            {tab === 'card' && <><AnalysisLink id={state.id} done={state.status === 'completed'} /><Scorecards state={state} /><SessionHistory state={state} /></>}
             {tab === 'ump' && (isUmp || priv.isHost) && <UmpirePanel state={state} priv={priv} />}
             {tab === 'chat' && <Chat className="h-[calc(100dvh-15rem)] lg:hidden" state={state} me={me} priv={priv} messages={messages} />}
           </div>
@@ -180,7 +180,7 @@ function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
   const cur = state.current;
   if (state.status === 'lobby') return <Lobby state={state} me={me} priv={priv} online={online} openLineups={openLineups} />;
   if (state.status === 'completed' || state.status === 'abandoned') {
-    return <><ResultCard state={state} /><Scorecards state={state} /></>;
+    return <><ResultCard state={state} /><AnalysisLink id={state.id} done /><Scorecards state={state} /></>;
   }
   const role = overRole(state, me);
   const inn = state.innings[state.innings.length - 1];
@@ -214,5 +214,16 @@ function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
         <Commentary items={state.commentary} />
       </section>
     </>
+  );
+}
+
+// Link to the full analysis: stats, replay and highlights, from the saved deliveries.
+function AnalysisLink({ id, done }) {
+  return (
+    <Link to={`/m/${id}/stats`} className="panel flex w-full items-center justify-between gap-3 p-4 hover:bg-pitch-700">
+      <span><span className="block font-display text-xl font-bold">{done ? 'Match analysis and replay' : 'Analysis so far'}</span>
+        <span className="block text-sm text-chalk-dim">Ball-by-ball replay, highlights, partnerships{done ? ', and every stat from this match' : ' and figures from the deliveries played'}.</span></span>
+      <span className="shrink-0 font-semibold text-flood">Open</span>
+    </Link>
   );
 }

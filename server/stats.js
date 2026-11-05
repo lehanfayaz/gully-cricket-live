@@ -55,10 +55,13 @@ export function profile(userId) {
 
 export function leaderboard(sort = 'runs') {
   const rows = all(`
-    WITH bat AS (SELECT batter_id AS id, SUM(runs) AS runs, COUNT(*) AS balls, SUM(is_wicket) AS outs, SUM(runs = 6) AS sixes
-                 FROM balls WHERE voided = 0 AND innings_id IN (${FINISHED}) GROUP BY batter_id),
-         bowl AS (SELECT bowler_id AS id, SUM(is_wicket = 1 AND COALESCE(dismissal, '') <> 'dot_rule') AS wickets, COUNT(*) AS balls, SUM(runs) AS conceded
-                  FROM balls WHERE voided = 0 AND innings_id IN (${FINISHED}) GROUP BY bowler_id),
+    WITH owned AS (SELECT b.*, COALESCE(bm.controller_id, b.batter_id) AS bat_owner, COALESCE(wm.controller_id, b.bowler_id) AS bowl_owner
+                   FROM balls b JOIN innings i ON i.id = b.innings_id
+                   LEFT JOIN members bm ON bm.match_id = i.match_id AND bm.user_id = b.batter_id
+                   LEFT JOIN members wm ON wm.match_id = i.match_id AND wm.user_id = b.bowler_id
+                   WHERE b.voided = 0 AND i.super_over = 0 AND b.innings_id IN (${FINISHED})),
+         bat AS (SELECT bat_owner AS id, SUM(runs) AS runs, COUNT(*) AS balls, SUM(is_wicket) AS outs, SUM(runs = 6) AS sixes FROM owned GROUP BY bat_owner),
+         bowl AS (SELECT bowl_owner AS id, SUM(is_wicket = 1 AND COALESCE(dismissal, '') <> 'dot_rule') AS wickets, COUNT(*) AS balls, SUM(runs) AS conceded FROM owned GROUP BY bowl_owner),
          rec AS (SELECT mb.user_id AS id, COUNT(*) AS matches,
                    SUM(json_extract(m.result, '$.winner') = mb.team) AS wins
                  FROM members mb JOIN matches m ON m.id = mb.match_id

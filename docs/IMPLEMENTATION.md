@@ -10,6 +10,7 @@ A reference for anyone changing the game. It describes the code as it is, where 
 | Rules engine | `server/engine.js` | Every match action: creation, lineups, toss, submissions, reveal, innings, sessions, suspension, results, chat. Clients only send intents. |
 | Digit rules | `server/rules.js` | Which numbers each role may pick per format, and the bowler repetition rule. Mirrored in `client/src/rules.js` only to grey out buttons. |
 | AI player | `server/ai.js` | Reads public state and revealed balls only, then acts through the same engine functions as a person |
+| Statistics and analysis | `server/analytics.js` | Careers, match analysis, ball-by-ball replay and highlights, all derived from the saved deliveries |
 | AI decisions | `server/aibrain.js` | Pure decision functions (no database or engine access): opponent models, difficulty, personality, situation, captaincy |
 | Database | `server/db.js` | SQLite (Node's built-in `node:sqlite`), schema and in-place upgrades |
 | Cricket data | `server/cricketdb.js`, `server/sync.js`, `server/providers/cricketdata.js` | Teams, squads and the daily sync |
@@ -39,6 +40,21 @@ Every engine action runs inside one SQLite transaction (`tx` in `db.js`, `BEGIN 
 | Test dot-over rule | `reveal`: after the 6th legal ball of an over, `isDotOver` creates a `dot_rules` row for the next over; balls 1–2 of that over meet, cancel (wicket) or break it. `endTestInnings` cancels open ones. No umpire: out (`dismissal = 'dot_rule'`, not credited to the bowler). Umpire: play held until a ruling. |
 | Sessions | `capFor` keeps a submission within the session; `sessionCheck` ends it after its overs; `endSession` records a summary and pauses (or rolls on if that break is switched off). Innings are independent of sessions. |
 | Suspend / resume | `testAction` `suspend` saves `status_before` in `suspensions`; `resume` restores exactly that status. Nothing advances automatically. Open submissions and requirements stay in the database. |
+
+## Statistics, replay and highlights
+
+**Source of truth.** Every figure comes from the `balls` table (revealed deliveries only), plus the umpire's run adjustments recorded in `audit` (`adjust_runs`). Voided deliveries appear in the replay, marked, and are never counted. Nothing is estimated: a figure with nothing to count is shown as a dash, never as zero.
+
+**Who gets credit.** In real-team matches, deliveries are played by squad players that a person or the AI controls. Career figures credit the controller (`members.controller_id`); match figures name the squad player. The leaderboard uses the same rule. Super overs are kept out of career figures but shown in the match.
+
+**Definitions.** A knock is one batter's stint between two wickets (`balls.stint`). A dot ball is a delivery with no runs, wickets included. A maiden is a complete six-ball over by one bowler with no runs. A partnership is the runs added for a wicket; one batter faces at a time, so it names who was in. Bowlers are not credited with dot-over-rule dismissals.
+
+**Endpoints.**
+- `GET /api/users/:id/career`: career summary, batting, bowling, splits by format, team and AI opponent, recent form and career bests.
+- `GET /api/matches/:id/analysis`: innings summaries, cards, fall of wickets, partnerships, best players, Test sessions and days, and highlights.
+- `GET /api/matches/:id/replay`: the timeline of deliveries, over ends, sessions, adjustments and innings transitions, with the running score.
+
+**Pages.** The career dashboard is at `/u/:id`; match analysis is at `/m/:id/stats`, with Summary, Scorecard, Replay and Highlights tabs. Each highlight opens the replay at its delivery.
 
 ## AI opponent
 
@@ -80,4 +96,5 @@ Each AI action is logged in `ai_decisions`. If the AI ever needed its fallback, 
 | `test/testmatch.test.js` | Test digits, sessions, suspend/resume, day changes, dot-over rule (no-umpire and umpire rulings), declarations, follow-on, innings win, draw |
 | `test/rules.test.js` | Every rule example from the specification, in both formats and both play styles, through the real engine, including repetition tracking across a mid-over session break and suspension |
 | `test/ai.test.js` | AI rule compliance (fuzzed), AI never seeing hidden picks, one-v-one and real-team matches, data sync, Quick Match |
+| `test/analytics.test.js` | Replay rebuilt into every scorecard (19 matches incl. Tests, real teams, voided overs and umpire adjustments); every career figure recounted directly from the balls table |
 | `test/aigrid.test.js` | Every difficulty × personality played as complete matches (Test, T20, ODI, Quick × complete over and ball by ball, 128 matches) and audited ball by ball; fairness; strength and personality differences; 8,000 fuzzed decisions |

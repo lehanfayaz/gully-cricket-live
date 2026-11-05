@@ -7,6 +7,7 @@ import { Server } from 'socket.io';
 import { get, all, run } from './db.js';
 import * as G from './engine.js';
 import { profile, leaderboard } from './stats.js';
+import { career, matchAnalysis, replay, highlights } from './analytics.js';
 import * as CDB from './cricketdb.js';
 import * as SYNC from './sync.js';
 import { aiStep } from './ai.js';
@@ -132,6 +133,21 @@ app.get('/api/users/:id', wrap((req) => {
   const p = profile(req.params.id);
   if (!p) throw new G.GameError('Player not found.');
   return p;
+}));
+// Statistics and analysis: computed from saved, revealed deliveries only.
+app.get('/api/users/:id/career', wrap((req) => {
+  if (!get('SELECT 1 FROM users WHERE id = ?', req.params.id)) throw new G.GameError('Player not found.');
+  return career(req.params.id);
+}));
+app.get('/api/matches/:id/analysis', wrap((req) => {
+  const a = matchAnalysis(req.params.id.toUpperCase());
+  if (!a) throw new G.GameError('No match with that code.');
+  return { analysis: a, highlights: highlights(null, a) };
+}));
+app.get('/api/matches/:id/replay', wrap((req) => {
+  const r = replay(req.params.id.toUpperCase());
+  if (!r) throw new G.GameError('No match with that code.');
+  return r;
 }));
 app.get('/api/leaderboard', wrap((req) => ({ sort: req.query.sort || 'points', rows: leaderboard(String(req.query.sort || 'points')) })));
 app.get('/healthz', (req, res) => res.json({ ok: true }));

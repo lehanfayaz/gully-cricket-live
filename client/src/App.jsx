@@ -6,6 +6,7 @@ import Match from './pages/Match.jsx';
 import Profile from './pages/Profile.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
 import Admin from './pages/Admin.jsx';
+import MatchStats from './pages/MatchStats.jsx';
 
 const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
@@ -50,6 +51,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Home />} />
             <Route path="/m/:id" element={<Match />} />
+            <Route path="/m/:id/stats" element={<MatchStats />} />
             <Route path="/u/:id" element={<Profile />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/admin" element={<Admin />} />
@@ -65,7 +67,7 @@ export default function App() {
 function Shell({ children }) {
   const { user } = useApp();
   const loc = useLocation();
-  const inMatch = loc.pathname.startsWith('/m/');
+  const inMatch = loc.pathname.startsWith('/m/') && !loc.pathname.endsWith('/stats');
   return (
     <div className="mx-auto flex min-h-dvh max-w-6xl flex-col">
       {!inMatch && (

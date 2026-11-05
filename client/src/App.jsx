@@ -33,7 +33,7 @@ export default function App() {
       if (!(here && (n.kind === 'bat' || n.kind === 'bowl'))) toast({ title: n.title, body: n.body, kind: n.kind, matchId: n.matchId });
       if (n.kind === 'bat' || n.kind === 'bowl') navigator.vibrate?.([120, 60, 120]);
       if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
-        try { new Notification(n.title, { body: n.body, tag: `gcl-${n.matchId}`, renotify: true }); } catch {}
+        try { new Notification(n.title, { body: n.body, tag: `fcl-${n.matchId}`, renotify: true }); } catch {}
       }
     });
   }), [toast]);
@@ -70,9 +70,9 @@ function Shell({ children }) {
         <header className="flex items-center justify-between px-4 pb-2 pt-4">
           <Link to="/" className="flex items-center gap-2">
             <span className="h-7 w-7"><div className="ball"><div className="ball-inner"><div className="ball-face" /></div></div></span>
-            <span className="font-display text-2xl font-extrabold leading-none">Gully Cricket <span className="text-flood">Live</span></span>
+            <span className="font-display text-xl font-extrabold leading-[0.95] sm:text-2xl">FOOTY CRICKET <span className="text-flood">LEAGUE</span></span>
           </Link>
-          <nav className="flex items-center gap-4 text-sm font-medium text-chalk-dim">
+          <nav className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm font-medium text-chalk-dim">
             <Link to="/leaderboard" className="hover:text-chalk">Leaderboard</Link>
             {user && <Link to={`/u/${user.id}`} className="hover:text-chalk">My stats</Link>}
           </nav>

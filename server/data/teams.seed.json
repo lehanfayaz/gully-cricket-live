@@ -1,0 +1,32 @@
+{
+  "about": "Starting team list used before the first successful sync, and kept as a fallback. Team names, codes and badge colours only: no players. The sync service and the admin page update and extend this data in the database; edit this file only to change the fallback.",
+  "asOf": "2026-11-05",
+  "categories": [
+    { "id": "international", "name": "International", "seasonId": "int-current", "seasonName": "Current international squads" },
+    { "id": "ipl", "name": "IPL", "seasonId": "ipl-2026", "seasonName": "IPL 2026" }
+  ],
+  "teams": [
+    { "id": "int-afg", "category": "international", "name": "Afghanistan", "short": "AFG", "country": "AF", "color": "#1C4E9C", "member": "full" },
+    { "id": "int-aus", "category": "international", "name": "Australia", "short": "AUS", "country": "AU", "color": "#F2B705", "member": "full" },
+    { "id": "int-ban", "category": "international", "name": "Bangladesh", "short": "BAN", "country": "BD", "color": "#006A4E", "member": "full" },
+    { "id": "int-eng", "category": "international", "name": "England", "short": "ENG", "country": "GB-ENG", "color": "#1D3C8F", "member": "full" },
+    { "id": "int-ind", "category": "international", "name": "India", "short": "IND", "country": "IN", "color": "#1C6DD0", "member": "full" },
+    { "id": "int-ire", "category": "international", "name": "Ireland", "short": "IRE", "country": "IE", "color": "#169B62", "member": "full" },
+    { "id": "int-nz", "category": "international", "name": "New Zealand", "short": "NZ", "country": "NZ", "color": "#222222", "member": "full" },
+    { "id": "int-pak", "category": "international", "name": "Pakistan", "short": "PAK", "country": "PK", "color": "#01411C", "member": "full" },
+    { "id": "int-sa", "category": "international", "name": "South Africa", "short": "SA", "country": "ZA", "color": "#007A4D", "member": "full" },
+    { "id": "int-sl", "category": "international", "name": "Sri Lanka", "short": "SL", "country": "LK", "color": "#0B3A82", "member": "full" },
+    { "id": "int-wi", "category": "international", "name": "West Indies", "short": "WI", "country": null, "color": "#7B0041", "member": "full" },
+    { "id": "int-zim", "category": "international", "name": "Zimbabwe", "short": "ZIM", "country": "ZW", "color": "#D40000", "member": "full" },
+    { "id": "ipl-csk", "category": "ipl", "name": "Chennai Super Kings", "short": "CSK", "color": "#F9CD05" },
+    { "id": "ipl-dc", "category": "ipl", "name": "Delhi Capitals", "short": "DC", "color": "#17479E" },
+    { "id": "ipl-gt", "category": "ipl", "name": "Gujarat Titans", "short": "GT", "color": "#1B2133" },
+    { "id": "ipl-kkr", "category": "ipl", "name": "Kolkata Knight Riders", "short": "KKR", "color": "#3A225D" },
+    { "id": "ipl-lsg", "category": "ipl", "name": "Lucknow Super Giants", "short": "LSG", "color": "#0057E2" },
+    { "id": "ipl-mi", "category": "ipl", "name": "Mumbai Indians", "short": "MI", "color": "#004BA0" },
+    { "id": "ipl-pbks", "category": "ipl", "name": "Punjab Kings", "short": "PBKS", "color": "#DD1F2D" },
+    { "id": "ipl-rcb", "category": "ipl", "name": "Royal Challengers Bengaluru", "short": "RCB", "color": "#D1171B" },
+    { "id": "ipl-rr", "category": "ipl", "name": "Rajasthan Royals", "short": "RR", "color": "#EA1A85" },
+    { "id": "ipl-srh", "category": "ipl", "name": "Sunrisers Hyderabad", "short": "SRH", "color": "#F26522" }
+  ]
+}

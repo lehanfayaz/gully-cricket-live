@@ -165,6 +165,24 @@ addColumn('innings', 'declared', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('innings', 'end_reason', 'TEXT');
 addColumn('balls', 'session_idx', 'INTEGER');                       // which session (Tests) the ball was bowled in
 addColumn('balls', 'dismissal', 'TEXT');                            // NULL/'matched' or 'dot_rule'
+// 1v1 matches, AI players and real teams
+addColumn('users', 'is_ghost', 'INTEGER NOT NULL DEFAULT 0');      // a roster player (e.g. from a real squad) played by a human or the AI
+addColumn('users', 'is_bot', 'INTEGER NOT NULL DEFAULT 0');        // the AI opponent
+addColumn('users', 'player_id', 'INTEGER');                        // cricket_players.id for roster players
+addColumn('members', 'kind', "TEXT NOT NULL DEFAULT 'player'");    // player | controller (controls a team's roster players)
+addColumn('members', 'controller_id', 'TEXT');                     // who submits for this roster player
+addColumn('matches', 'team_a_meta', 'TEXT');                       // JSON snapshot: source, category, logo, colour, squad…
+addColumn('matches', 'team_b_meta', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS team_selections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id TEXT NOT NULL, side TEXT NOT NULL, team_id TEXT, team_name TEXT, user_id TEXT, created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ai_decisions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  match_id TEXT NOT NULL, user_id TEXT NOT NULL, kind TEXT NOT NULL, detail TEXT, created_at INTEGER NOT NULL
+);
+`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS match_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

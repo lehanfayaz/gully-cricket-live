@@ -171,7 +171,9 @@ function overRole(state, me) {
   if (!cur || state.status !== 'live' || state.paused) return null;
   const bowler = cur.open ? cur.set.bowlerId : cur.bowlerId;
   const batter = cur.open ? cur.set.batterId : cur.strikerId;
-  return me === bowler ? 'bowl' : me === batter ? 'bat' : null;
+  // You act for a player if it's you, or you control their team's roster (real-team one-v-one).
+  const mine = (pid) => pid === me || state.members.find((x) => x.id === pid)?.controller === me;
+  return mine(bowler) ? 'bowl' : mine(batter) ? 'bat' : null;
 }
 
 function PlayTab({ state, priv, me, isUmp, online, openLineups }) {

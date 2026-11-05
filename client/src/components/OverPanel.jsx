@@ -38,6 +38,8 @@ export function SubmitOver({ state, role, cur, priv }) {
   const set = cur.open ? cur.set : null;
   const otherLocked = role === 'bowl' ? set?.batterLocked : set?.bowlerLocked;
   const otherName = role === 'bowl' ? cur.strikerName : cur.bowlerName;
+  const myName = role === 'bowl' ? cur.bowlerName : cur.strikerName;
+  const forRoster = state.teamSource === 'real';
   const need = cur.cap;
   const single = need === 1;
   const digits = digitsFor(state, role);
@@ -102,6 +104,7 @@ export function SubmitOver({ state, role, cur, priv }) {
         <h2 className="font-display text-3xl font-extrabold leading-none">
           {single ? (role === 'bowl' ? 'Bowl this ball' : 'Play this ball') : role === 'bowl' ? `Bowl ${need} balls` : `Bat ${need} balls`}
         </h2>
+        {forRoster && <p className="mt-1 font-semibold text-flood">{role === 'bowl' ? 'Bowling' : 'Batting'}: {myName}</p>}
         <p className="mt-1 text-sm text-chalk-dim">
           {overLine(cur)}{' '}
           {role === 'bowl' ? `If ${otherName} picks the same number, they're out.` : `Score what you pick, unless ${otherName} picked the same.`}

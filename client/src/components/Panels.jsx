@@ -3,6 +3,38 @@ import { Link } from 'react-router-dom';
 import { emit, matchLink } from '../api.js';
 import { useApp } from '../App.jsx';
 import { TossPanel } from './Toss.jsx';
+import TeamBadge from './TeamBadge.jsx';
+
+export const teamIdentity = (state, t) => state.teamMeta?.[t] || { name: state.teams[t].name, short: state.teams[t].name.slice(0, 3).toUpperCase(), color: t === 'A' ? '#2FD67B' : '#FFD23F' };
+
+// One-v-one: two seats, each a person or the AI.
+function Seats({ state, me, priv, call }) {
+  const mine = state.members.find((m) => m.id === me);
+  const playing = state.members.some((m) => m.id === me && (m.kind === 'controller' || (m.team && state.participation !== 'team')));
+  const umpire = state.mode === 'umpire' && state.host.id === me;
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      {['A', 'B'].map((t) => {
+        const id = teamIdentity(state, t);
+        const who = state.teamSource === 'real' ? state.teams[t].controller : state.teams[t].players[0];
+        const open = !who;
+        return (
+          <div key={t} className="rounded-xl bg-pitch-900/60 p-3 text-center">
+            <TeamBadge team={id} size={48} className="mx-auto" />
+            <div className="mt-1 truncate font-display text-xl font-bold">{state.teams[t].name}</div>
+            {open ? (
+              !playing && !umpire && !state.toss.result
+                ? <button className="btn-go mt-2 w-full py-2" onClick={() => call('team:join', { team: t }, 'Could not join')}>Play as {state.teams[t].name}</button>
+                : <p className="mt-1 text-sm text-chalk-dim">Waiting for a player. Share the link.</p>
+            ) : (
+              <p className="mt-1 text-sm text-chalk-dim">{who.bot ? `🤖 ${who.name}` : who.id === me ? 'You' : who.name}</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export function Waiting({ title, body }) {
   return (
@@ -90,6 +122,7 @@ export function Lobby({ state, me, priv, online, openLineups }) {
     if (!r.ok) toast({ title: fail, body: r.error });
   };
   const bench = state.members.filter((m) => !m.team);
+  const people = state.members.filter((m) => !m.ghost && !m.bot).length;
   const dot = (id) => <span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${online.includes(id) ? 'bg-turf' : 'bg-pitch-500'}`} aria-label={online.includes(id) ? 'online' : 'offline'} />;
   const c = state.config;
   const both = !!(state.lineups.A.confirmedAt && state.lineups.B.confirmedAt);
@@ -109,12 +142,16 @@ export function Lobby({ state, me, priv, online, openLineups }) {
         {c.spectators === 'watch' ? 'Spectators watch only.' : 'Spectators can chat.'}
       </section>
 
-      <Step n={1} title="Invite players" done={state.members.length > 1}>
+      <Step n={1} title="Invite players" done={people > 1}>
         <Invite id={state.id} />
-        <p className="mt-2 text-sm text-chalk-dim">{state.members.length} {state.members.length === 1 ? 'person has' : 'people have'} joined.</p>
+        <p className="mt-2 text-sm text-chalk-dim">{people} {people === 1 ? 'person has' : 'people have'} joined.</p>
       </Step>
 
-      <Step n={2} title="Pick teams and captains" done={state.teams.A.players.length > 0 && state.teams.B.players.length > 0}>
+      {state.participation !== 'team' ? (
+        <Step n={2} title="Players" done={!!(state.teamSource === 'real' ? state.teams.A.controller && state.teams.B.controller : state.teams.A.players.length && state.teams.B.players.length)}>
+          <Seats state={state} me={me} priv={priv} call={call} />
+        </Step>
+      ) : <Step n={2} title="Pick teams and captains" done={state.teams.A.players.length > 0 && state.teams.B.players.length > 0}>
         {tossed && <p className="mb-2 text-sm text-flood">Squads are locked now the toss is done.</p>}
         <div className="grid gap-3 sm:grid-cols-2">
           {['A', 'B'].map((t) => {
@@ -166,9 +203,9 @@ export function Lobby({ state, me, priv, online, openLineups }) {
             )}
           </div>
         )}
-      </Step>
+      </Step>}
 
-      <Step n={3} title="Captains confirm lineups" done={both}>
+      <Step n={3} title={state.participation === 'team' ? 'Captains confirm lineups' : 'Confirm lineups'} done={both}>
         <table className="w-full text-sm">
           <thead className="text-left text-chalk-dim"><tr><th className="pb-1 font-medium">Team</th><th className="pb-1 font-medium">Captain</th><th className="pb-1 text-right font-medium">Lineup</th></tr></thead>
           <tbody>
@@ -177,8 +214,8 @@ export function Lobby({ state, me, priv, online, openLineups }) {
               const cap = state.members.find((m) => m.id === state.captains[t]);
               return (
                 <tr key={t} className="border-t border-pitch-600">
-                  <td className="py-2 font-semibold">{state.teams[t].name}</td>
-                  <td className="py-2">{cap?.name || <span className="text-chalk-faint">none yet</span>}</td>
+                  <td className="py-2 font-semibold"><span className="flex items-center gap-2"><TeamBadge team={teamIdentity(state, t)} size={22} />{state.teams[t].name}</span></td>
+                  <td className="py-2">{cap ? (cap.bot ? `🤖 ${cap.name}` : cap.name) : <span className="text-chalk-faint">none yet</span>}</td>
                   <td className="py-2 text-right">
                     {at ? <span className="rounded-full bg-turf px-2.5 py-0.5 text-xs font-bold text-pitch-900">Confirmed {time(at)}</span>
                       : <span className="rounded-full bg-pitch-600 px-2.5 py-0.5 text-xs font-bold text-chalk-dim">Pending</span>}
@@ -190,7 +227,7 @@ export function Lobby({ state, me, priv, online, openLineups }) {
         </table>
         {priv.captainOf?.map((t) => !state.lineups[t].confirmedAt && !tossed && (
           <div key={t} className="mt-3 rounded-xl bg-pitch-900/60 p-3">
-            <p className="text-sm">You're {state.teams[t].name}'s captain. Check the batting and bowling order, then confirm.</p>
+            <p className="text-sm">{state.teamSource === 'real' ? `You're playing as ${state.teams[t].name}. Pick your XI and batting order, then confirm.` : state.participation === 'team' ? `You're ${state.teams[t].name}'s captain. Check the batting and bowling order, then confirm.` : 'Ready? Confirm to unlock the toss.'}</p>
             <div className="mt-2 flex gap-2">
               <button className="btn-ghost flex-1" onClick={openLineups}>Review lineup</button>
               <button className="btn-go flex-1" disabled={!state.teams[t].players.length} onClick={() => call('lineup:confirm', { team: t }, 'Lineup not confirmed')}>Confirm lineup</button>

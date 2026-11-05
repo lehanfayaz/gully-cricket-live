@@ -6,6 +6,7 @@
 import crypto from 'node:crypto';
 import { get, all, run, tx } from './db.js';
 import { checkDigits, isDotOver, isTest } from './rules.js';
+import { getTeam } from './cricketdb.js';
 
 export class GameError extends Error {}
 const fail = (msg) => { throw new GameError(msg); };
@@ -23,6 +24,12 @@ export const DEFAULT_CONFIG = {
   sessionMinutes: 0,        // optional time limit shown as a countdown; 0 = off
   lunch: true, tea: true, stumps: true, // pause for these breaks (off = roll straight into the next session)
   followOn: true,
+  // Who plays: 'team' (multiplayer teams), 'pvp' (one human v one human), 'ai' (one human v the AI)
+  participation: 'team',
+  teamSource: 'custom',     // 'custom' | 'real' (international/IPL teams; 1v1 only)
+  aiLevel: 'medium',        // easy | medium | hard | expert
+  xiSize: 11,               // players picked from a real squad
+  allowSameTeam: false,
   overs: 2,
   wickets: 3,
   playersPerTeam: 11,
@@ -47,7 +54,13 @@ export function sanitizeConfig(input = {}, base = DEFAULT_CONFIG) {
   c.oversPerSession = int(input.oversPerSession, 1, 90, c.oversPerSession);
   c.inningsPerTeam = int(input.inningsPerTeam, 1, 2, c.inningsPerTeam);
   c.sessionMinutes = int(input.sessionMinutes, 0, 240, c.sessionMinutes);
-  for (const k of ['lunch', 'tea', 'stumps', 'followOn']) if (k in input) c[k] = !!input[k];
+  for (const k of ['lunch', 'tea', 'stumps', 'followOn', 'allowSameTeam']) if (k in input) c[k] = !!input[k];
+  if (['team', 'pvp', 'ai'].includes(input.participation)) c.participation = input.participation;
+  if (['easy', 'medium', 'hard', 'expert'].includes(input.aiLevel)) c.aiLevel = input.aiLevel;
+  c.teamSource = input.teamSource === 'real' && c.participation !== 'team' ? 'real' : 'custom';
+  c.xiSize = int(input.xiSize, 2, 11, c.xiSize);
+  if (c.participation !== 'team') c.playersPerTeam = c.teamSource === 'real' ? c.xiSize : 1; // 1v1
+  if (c.participation === 'ai') c.mode = 'auto'; // an umpire would see the bowler's numbers; not needed against the AI
   if (input.spectators === 'open' || input.spectators === 'watch') c.spectators = input.spectators;
   for (const k of ['superOver', 'noConsecutive']) if (k in input) c[k] = !!input[k];
   return c;
@@ -71,9 +84,17 @@ const isHost = (m, uid) => m.umpire_id === uid;
 const captainOf = (m, team) => (team === 'A' ? m.captain_a : m.captain_b);
 const memberOf = (matchId, uid) => get('SELECT * FROM members WHERE match_id = ? AND user_id = ?', matchId, uid);
 
+// The people (or roster players) who bat and bowl for a team. Controllers, who play on their behalf, aren't included.
 export const teamPlayers = (matchId, team) =>
   all(`SELECT m.user_id AS id, u.display_name AS name, m.bat_order, m.bowl_order, m.bowls FROM members m JOIN users u ON u.id = m.user_id
-       WHERE m.match_id = ? AND m.team = ? AND m.banned = 0 ORDER BY m.bat_order, m.joined_at`, matchId, team);
+       WHERE m.match_id = ? AND m.team = ? AND m.banned = 0 AND m.kind = 'player' ORDER BY m.bat_order, m.joined_at`, matchId, team);
+const controllerMember = (matchId, team) =>
+  get(`SELECT * FROM members WHERE match_id = ? AND team = ? AND kind = 'controller' AND banned = 0`, matchId, team);
+// Who submits for this player: themselves, or the human/AI controlling their roster.
+export function controllerOf(matchId, playerId) {
+  return get('SELECT controller_id FROM members WHERE match_id = ? AND user_id = ?', matchId, playerId)?.controller_id || null;
+}
+const actsFor = (matchId, userId, playerId) => !!playerId && (userId === playerId || controllerOf(matchId, playerId) === userId);
 const bowlingLineup = (matchId, team) => {
   const squad = teamPlayers(matchId, team);
   const picked = squad.filter((p) => p.bowls).sort((a, b) => a.bowl_order - b.bowl_order || a.bat_order - b.bat_order);
@@ -132,11 +153,22 @@ function newCode() {
   }
 }
 
-export function createMatch(userId, { name, teamA, teamB, config, copyFrom }) {
+export function createMatch(userId, { name, teamA, teamB, config, copyFrom, realTeams }) {
   const id = newCode();
   const cfg = sanitizeConfig(config);
+  // Real international/IPL teams are only for one-v-one matches.
+  if (realTeams && cfg.participation === 'team') fail('Real cricket teams are only available in one-v-one matches.');
+  if (cfg.teamSource === 'real') {
+    if (!realTeams?.A || !realTeams?.B) fail('Pick both teams.');
+    if (realTeams.A === realTeams.B && !cfg.allowSameTeam) fail('Both sides picked the same team. Pick a different opponent or allow mirror matches.');
+  }
+  const realA = cfg.teamSource === 'real' ? getTeam(realTeams.A) : null;
+  const realB = cfg.teamSource === 'real' ? getTeam(realTeams.B) : null;
+  if (cfg.teamSource === 'real' && (!realA || !realB)) fail('One of those teams no longer exists. Pick again.');
+  if (cfg.participation !== 'team') copyFrom = null;
   tx(() => {
-    let a = (teamA || 'Team A').slice(0, 30), b = (teamB || 'Team B').slice(0, 30);
+    let a = (realA?.name || teamA || 'Team A').slice(0, 30), b = (realB?.name || teamB || 'Team B').slice(0, 30);
+    if (realA && realB && realA.id === realB.id) { a = `${realA.name} (1)`.slice(0, 30); b = `${realB.name} (2)`.slice(0, 30); }
     const src = copyFrom ? get('SELECT * FROM matches WHERE id = ?', String(copyFrom).toUpperCase()) : null;
     if (copyFrom && (!src || !memberOf(src.id, userId))) fail('You can only reuse squads from a match you were in.');
     if (src && !teamA) a = src.team_a;
@@ -154,11 +186,98 @@ export function createMatch(userId, { name, teamA, teamB, config, copyFrom }) {
       run('UPDATE matches SET captain_a = ?, captain_b = ? WHERE id = ?', src.captain_a, src.captain_b, id);
       fixCaptains(id);
     }
-    announce(id, cfg.mode === 'umpire'
-      ? 'Match created with an umpire. Share the link so friends can join.'
-      : 'Match created. No umpire needed: the game runs itself. Share the link so friends can join.', null, 'public', 'system');
+    if (cfg.participation !== 'team') setupOneVOne(id, userId, cfg, realA, realB);
+    announce(id, cfg.participation === 'ai'
+      ? `Match created: you v the AI (${cfg.aiLevel}).`
+      : cfg.mode === 'umpire'
+        ? 'Match created with an umpire. Share the link so friends can join.'
+        : 'Match created. No umpire needed: the game runs itself. Share the link so friends can join.', null, 'public', 'system');
   });
   return id;
+}
+
+// ---------- one-v-one: real squads, roster players, the AI ----------
+const ROLE_RANK = { wk: 0, bat: 1, ar: 2, bowl: 3 };
+const teamMeta = (t, cat) => t ? ({
+  source: 'real', teamId: t.id, category: cat || t.category, name: t.name, short: t.short, color: t.color, logo: t.logo, country: t.country,
+  squad: t.squad.map((p) => ({ playerId: p.id, name: p.name, role: p.role, image: p.image })), squadSyncedAt: t.updatedAt, placeholders: !t.squad.length,
+}) : null;
+
+// A sensible default XI: a keeper, batters, all-rounders, then bowlers.
+export function defaultXI(squad, size) {
+  const by = (r) => squad.filter((p) => p.role === r);
+  const pick = [...by('wk').slice(0, 1), ...by('bat').slice(0, 4), ...by('ar').slice(0, 2), ...by('bowl').slice(0, 4)];
+  for (const p of squad) if (pick.length < size && !pick.includes(p)) pick.push(p);
+  return pick.slice(0, size);
+}
+
+// Create the roster players for a team (replacing any previous XI). Lobby only.
+function setXI(matchId, team, players, controllerId) {
+  for (const old of all(`SELECT m.user_id FROM members m JOIN users u ON u.id = m.user_id WHERE m.match_id = ? AND m.team = ? AND u.is_ghost = 1`, matchId, team)) {
+    run('DELETE FROM members WHERE match_id = ? AND user_id = ?', matchId, old.user_id);
+  }
+  const ordered = [...players].sort((a, b) => (ROLE_RANK[a.role] ?? 1) - (ROLE_RANK[b.role] ?? 1));
+  const bowlers = [...players].filter((p) => p.role === 'bowl' || p.role === 'ar').sort((a, b) => (a.role === 'bowl' ? 0 : 1) - (b.role === 'bowl' ? 0 : 1));
+  const bowlSet = bowlers.length >= 2 ? bowlers : players;
+  ordered.forEach((p, i) => {
+    const uid = crypto.randomUUID();
+    run('INSERT INTO users (id, display_name, is_guest, is_ghost, player_id, created_at) VALUES (?,?,1,1,?,?)', uid, p.name.slice(0, 40), p.playerId || null, now());
+    const bi = bowlSet.indexOf(p);
+    run(`INSERT INTO members (match_id, user_id, team, bat_order, bowl_order, bowls, kind, controller_id, joined_at) VALUES (?,?,?,?,?,?, 'player', ?, ?)`,
+      matchId, uid, team, i, bi >= 0 ? bi : 99, bi >= 0 ? 1 : 0, controllerId || null, now());
+  });
+}
+
+function squadFor(meta, size) {
+  if (meta.squad.length >= 2) return meta.squad;
+  // No synced squad: clearly labelled stand-ins, never made-up real names.
+  return Array.from({ length: size }, (_, i) => ({ playerId: null, name: `${meta.short || meta.name} player ${i + 1}`, role: i < 6 ? 'bat' : 'bowl' }));
+}
+
+function addController(matchId, team, userId) {
+  const exists = memberOf(matchId, userId);
+  if (exists) run(`UPDATE members SET team = ?, kind = 'controller', bowls = 0 WHERE match_id = ? AND user_id = ?`, team, matchId, userId);
+  else run(`INSERT INTO members (match_id, user_id, team, kind, bowls, joined_at) VALUES (?,?,?, 'controller', 0, ?)`, matchId, userId, team, now());
+  run(`UPDATE members SET controller_id = ? WHERE match_id = ? AND team = ? AND kind = 'player'`, userId, matchId, team);
+  fixCaptains(matchId);
+}
+
+function createBot(cfg, label) {
+  const id = crypto.randomUUID();
+  const level = cfg.aiLevel[0].toUpperCase() + cfg.aiLevel.slice(1);
+  run('INSERT INTO users (id, display_name, is_guest, is_bot, created_at) VALUES (?,?,1,1,?)', id, `${label} AI (${level})`.slice(0, 40), now());
+  return id;
+}
+
+function setupOneVOne(matchId, userId, cfg, realA, realB) {
+  const human = cfg.mode !== 'umpire'; // with an umpire, the creator umpires and two others play
+  if (cfg.teamSource === 'real') {
+    const metaA = teamMeta(realA), metaB = teamMeta(realB);
+    run('UPDATE matches SET team_a_meta = ?, team_b_meta = ? WHERE id = ?', JSON.stringify(metaA), JSON.stringify(metaB), matchId);
+    run('INSERT INTO team_selections (match_id, side, team_id, team_name, user_id, created_at) VALUES (?,?,?,?,?,?)', matchId, 'A', realA.id, realA.name, userId, now());
+    run('INSERT INTO team_selections (match_id, side, team_id, team_name, user_id, created_at) VALUES (?,?,?,?,?,?)', matchId, 'B', realB.id, realB.name, userId, now());
+    setXI(matchId, 'A', defaultXI(squadFor(metaA, cfg.xiSize), cfg.xiSize), null);
+    setXI(matchId, 'B', defaultXI(squadFor(metaB, cfg.xiSize), cfg.xiSize), null);
+    if (human) addController(matchId, 'A', userId);
+    if (cfg.participation === 'ai') addController(matchId, 'B', createBot(cfg, realB.short || realB.name));
+  } else {
+    if (human) run(`UPDATE members SET team = 'A' WHERE match_id = ? AND user_id = ?`, matchId, userId);
+    if (cfg.participation === 'ai') {
+      const bot = createBot(cfg, 'The');
+      run(`INSERT INTO members (match_id, user_id, team, joined_at) VALUES (?,?, 'B', ?)`, matchId, bot, now());
+    }
+  }
+  fixCaptains(matchId);
+}
+
+// A second human takes the open side in a one-v-one real-team match.
+function claimSeat(m, userId, team) {
+  if (controllerMember(m.id, team)) fail(`${teamName(m, team)} already has a player.`);
+  const mem = memberOf(m.id, userId);
+  if (mem?.kind === 'controller') fail('You are already playing in this match.');
+  if (m.config.mode === 'umpire' && m.umpire_id === userId) fail('You are umpiring this match.');
+  addController(m.id, team, userId);
+  lineupChanged(m.id, team, `${userName(userId)} is playing as ${teamName(m, team)}`);
 }
 
 export function joinMatch(userId, matchId) {
@@ -177,6 +296,9 @@ export function joinMatch(userId, matchId) {
 function fixCaptains(matchId) {
   const m = get('SELECT captain_a, captain_b FROM matches WHERE id = ?', matchId);
   for (const t of ['A', 'B']) {
+    // A team run by a controller (a human or the AI managing a real squad) is captained by that controller.
+    const ctl = controllerMember(matchId, t);
+    if (ctl) { run(`UPDATE matches SET ${t === 'A' ? 'captain_a' : 'captain_b'} = ? WHERE id = ?`, ctl.user_id, matchId); continue; }
     const squad = teamPlayers(matchId, t);
     const cap = t === 'A' ? m.captain_a : m.captain_b;
     if (!squad.some((p) => p.id === cap)) {
@@ -463,7 +585,7 @@ export function submitOver(userId, matchId, seq, ctx) {
     let set = openSet(inn.id);
     const bowlerId = set ? set.bowler_id : inn.bowler_id;
     const batterId = set ? set.batter_id : inn.striker_id;
-    const role = userId === bowlerId ? 'bowl' : userId === batterId ? 'bat' : null;
+    const role = actsFor(matchId, userId, bowlerId) ? 'bowl' : actsFor(matchId, userId, batterId) ? 'bat' : null;
     if (!role) fail("It isn't your turn.");
     // How many numbers this submission must have: one per ball still to come in this over (and session), or exactly one ball by ball.
     const need = set ? set.cap - set.used : capFor(m, inn);
@@ -487,14 +609,14 @@ export function submitOver(userId, matchId, seq, ctx) {
       run('UPDATE sets SET bat_seq = ?, bat_salt = ?, bat_hash = ?, bat_at = ? WHERE id = ?', digits, salt, hash, now(), set.id);
     }
     set = get('SELECT * FROM sets WHERE id = ?', set.id);
-    if (m.config.play === 'over') announce(matchId, `🔒 ${userName(userId)} has locked in.`, { type: 'locked', role, hash });
-    if (role === 'bowl' && isUmpire(m, m.umpire_id) && m.umpire_id !== batterId && m.config.play === 'over')
+    if (m.config.play === 'over') announce(matchId, `🔒 ${userName(role === 'bowl' ? bowlerId : batterId)} has locked in.`, { type: 'locked', role, hash });
+    if (role === 'bowl' && isUmpire(m, m.umpire_id) && !actsFor(matchId, m.umpire_id, batterId) && m.config.play === 'over')
       ctx.notify.push({ userId: m.umpire_id, title: 'Bowler locked in', body: `${userName(userId)}'s numbers are in your umpire panel.`, kind: 'info' });
 
     if (set.seq && set.bat_seq) reveal(m, inn, set, ctx);
     else {
       const waiting = role === 'bowl' ? batterId : bowlerId;
-      ctx.notify.push({ userId: waiting, title: `${userName(userId)} is locked in`, body: need === 1 ? 'Your turn: pick your number.' : `Your turn: lock in your ${need} numbers.`, kind: role === 'bowl' ? 'bat' : 'bowl' });
+      ctx.notify.push({ userId: waiting, title: `${userName(role === 'bowl' ? bowlerId : batterId)} is locked in`, body: need === 1 ? 'Your turn: pick your number.' : `Your turn: lock in your ${need} numbers.`, kind: role === 'bowl' ? 'bat' : 'bowl' });
     }
   });
 }
@@ -904,6 +1026,12 @@ export function joinTeam(userId, matchId, team, ctx) {
     const m = loadMatch(matchId);
     if (m.status !== 'lobby' || tossDone(m)) fail('Teams are locked after the toss.');
     const t = team === 'A' || team === 'B' ? team : null;
+    if (m.config.teamSource === 'real') {
+      if (!t) fail('Ask the match creator to start a new match if you need to leave.');
+      claimSeat(m, userId, t);
+      record(matchId, userId, 'join_team', `${userName(userId)} is playing as ${teamName(m, t)}.`);
+      return;
+    }
     const before = memberOf(matchId, userId)?.team;
     if (before === t) return;
     putInTeam(m, userId, t);
@@ -974,6 +1102,7 @@ export function captainAction(userId, matchId, a, ctx) {
       }
       case 'add': {
         requireSquadsOpen(m);
+        if (m.config.teamSource === 'real') fail('Real teams pick their XI from the squad instead.');
         const mem = memberOf(matchId, a.userId);
         if (!mem || mem.banned || mem.team) fail('Pick someone who is watching, not already in a team.');
         putInTeam(m, a.userId, team);
@@ -983,6 +1112,7 @@ export function captainAction(userId, matchId, a, ctx) {
       }
       case 'remove': {
         requireSquadsOpen(m);
+        if (m.config.teamSource === 'real') fail('Real teams pick their XI from the squad instead.');
         if (!ids.includes(a.userId)) fail(`That player isn't in ${tn}.`);
         if (a.userId === userId) fail('Hand the captaincy to someone else first.');
         if (squad.length === 1) fail('A team needs at least one player.');
@@ -991,7 +1121,31 @@ export function captainAction(userId, matchId, a, ctx) {
         record(matchId, userId, 'remove_player', `${userName(a.userId)} left ${tn}'s lineup (captain's decision).`, { team, userId: a.userId });
         break;
       }
+      case 'select_xi': {
+        if (m.config.teamSource !== 'real') fail('Playing XIs are picked for real teams only.');
+        requireSquadsOpen(m);
+        const meta = JSON.parse((team === 'A' ? m.team_a_meta : m.team_b_meta) || 'null');
+        const pool = squadFor(meta, m.config.xiSize);
+        const want = Math.min(m.config.xiSize, pool.length);
+        const picks = (Array.isArray(a.playerIds) ? a.playerIds : []).map((pid) => pool.find((p) => String(p.playerId) === String(pid))).filter(Boolean);
+        if (new Set(picks).size !== want) fail(`Pick exactly ${want} players from the squad.`);
+        setXI(matchId, team, picks, userId);
+        record(matchId, userId, 'select_xi', `${tn} playing XI: ${picks.map((p) => p.name).join(', ')}.`, { team });
+        lineupChanged(matchId, team, 'new playing XI');
+        break;
+      }
+      case 'xi_captain': {
+        if (m.config.teamSource !== 'real') fail('Only for real teams.');
+        if (!ids.includes(a.userId)) fail(`Pick someone from ${tn}'s XI.`);
+        const col = team === 'A' ? 'team_a_meta' : 'team_b_meta';
+        const meta = JSON.parse(m[col] || '{}');
+        meta.captainId = a.userId;
+        run(`UPDATE matches SET ${col} = ? WHERE id = ?`, JSON.stringify(meta), matchId);
+        record(matchId, userId, 'xi_captain', `${userName(a.userId)} will captain ${tn}.`, { team });
+        break;
+      }
       case 'captain': {
+        if (m.config.teamSource === 'real') fail('In real-team matches, use "captain on the field" for the XI.');
         if (!ids.includes(a.userId)) fail(`Pick someone from ${tn}.`);
         run(`UPDATE matches SET ${team === 'A' ? 'captain_a' : 'captain_b'} = ? WHERE id = ?`, a.userId, matchId);
         record(matchId, userId, 'captain', `${userName(a.userId)} is now ${tn}'s captain.`, { team, userId: a.userId });
@@ -1016,6 +1170,7 @@ export function umpireAction(userId, matchId, a, ctx) {
       case 'assign': {
         needHost();
         requireSquadsOpen(m);
+        if (m.config.participation !== 'team') fail('In one-v-one matches, players join from the invite link.');
         const team = a.team === 'A' || a.team === 'B' ? a.team : null;
         putInTeam(m, a.userId, team);
         record(matchId, userId, 'assign', team ? `${userName(a.userId)} joins ${teamName(m, team)}.` : `${userName(a.userId)} is now watching.`, { userId: a.userId, team });
@@ -1233,9 +1388,9 @@ function setView(set) {
 export function publicState(matchId) {
   const m = loadMatch(matchId);
   const members = all(`SELECT m.user_id AS id, u.display_name AS name, u.is_guest AS guest, m.team, m.bat_order AS ord,
-                         m.bowl_order AS bowlOrd, m.bowls, m.muted
+                         m.bowl_order AS bowlOrd, m.bowls, m.muted, m.kind, m.controller_id AS controller, u.is_bot AS bot, u.is_ghost AS ghost, u.player_id AS playerId
                        FROM members m JOIN users u ON u.id = m.user_id WHERE m.match_id = ? AND m.banned = 0 ORDER BY m.joined_at`, matchId)
-    .map((x) => ({ ...x, bowls: !!x.bowls, muted: !!x.muted }));
+    .map((x) => ({ ...x, bowls: !!x.bowls, muted: !!x.muted, bot: !!x.bot, ghost: !!x.ghost }));
   const inningsRows = all('SELECT * FROM innings WHERE match_id = ? ORDER BY number', matchId);
   const innings = inningsRows.map((i) => scorecard(m, i));
   const inn = inningsRows[inningsRows.length - 1];
@@ -1334,14 +1489,16 @@ export function publicState(matchId) {
   return {
     id: m.id, name: m.name, status: m.status, stage, paused: !!m.paused, config: m.config, tossBat: m.toss_bat,
     mode: m.config.mode, play: m.config.play, format: m.config.format, test,
+    participation: m.config.participation, teamSource: m.config.teamSource, aiLevel: m.config.participation === 'ai' ? m.config.aiLevel : null,
+    teamMeta: { A: m.team_a_meta ? JSON.parse(m.team_a_meta) : null, B: m.team_b_meta ? JSON.parse(m.team_b_meta) : null },
     lineups: { A: { confirmedAt: m.confirm_a || null }, B: { confirmedAt: m.confirm_b || null } },
     toss: { caller: m.toss_caller, call: m.toss_call, result: m.toss_result, winner: m.toss_winner, decision: m.toss_decision, at: m.toss_at },
     host: { id: m.umpire_id, name: userName(m.umpire_id) },
     umpire: m.config.mode === 'umpire' ? { id: m.umpire_id, name: userName(m.umpire_id) } : null,
     captains: { A: m.captain_a, B: m.captain_b },
     teams: {
-      A: { name: m.team_a, players: members.filter((x) => x.team === 'A').sort((a, b) => a.ord - b.ord) },
-      B: { name: m.team_b, players: members.filter((x) => x.team === 'B').sort((a, b) => a.ord - b.ord) },
+      A: { name: m.team_a, players: members.filter((x) => x.team === 'A' && x.kind === 'player').sort((a, b) => a.ord - b.ord), controller: members.find((x) => x.team === 'A' && x.kind === 'controller') || null },
+      B: { name: m.team_b, players: members.filter((x) => x.team === 'B' && x.kind === 'player').sort((a, b) => a.ord - b.ord), controller: members.find((x) => x.team === 'B' && x.kind === 'controller') || null },
     },
     members, innings, current, commentary, history, result: m.result, createdAt: m.created_at,
   };
@@ -1356,10 +1513,10 @@ export function privateState(matchId, userId) {
   out.captainOf = ['A', 'B'].filter((t) => captainOf(m, t) === userId);
   if (inn) {
     const set = openSet(inn.id);
-    if (set && set.bowler_id === userId && set.seq) out.myLocked = set.seq.split('').map(Number);
-    if (set && set.batter_id === userId && set.bat_seq) out.myLocked = set.bat_seq.split('').map(Number);
+    if (set && actsFor(matchId, userId, set.bowler_id) && set.seq) out.myLocked = set.seq.split('').map(Number);
+    if (set && actsFor(matchId, userId, set.batter_id) && set.bat_seq) out.myLocked = set.bat_seq.split('').map(Number);
     // With an umpire, the umpire privately sees the bowler's six (never the batter's), unless the umpire is the batter.
-    if (set && out.isUmpire && set.seq && set.batter_id !== userId) out.bowlerSequence = set.seq.split('').map(Number);
+    if (set && out.isUmpire && set.seq && !actsFor(matchId, userId, set.batter_id)) out.bowlerSequence = set.seq.split('').map(Number);
   }
   return out;
 }

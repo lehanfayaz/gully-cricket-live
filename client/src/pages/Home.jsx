@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import { SignInCard, useApp } from '../App.jsx';
+import TeamBadge from '../components/TeamBadge.jsx';
+import TeamPicker, { SyncNote } from '../components/TeamPicker.jsx';
 
 export default function Home() {
   const { user, signOut } = useApp();
@@ -72,7 +74,7 @@ function Stepper({ label, value, set, min, max }) {
   );
 }
 
-const STEPS = ['Format', 'Rules', 'Teams'];
+const STEPS = ['Who plays', 'Format', 'Rules', 'Teams'];
 
 function Choice({ selected, onClick, title, body }) {
   return (
@@ -91,8 +93,14 @@ function CreateMatch() {
     name: '', format: 'custom', overs: 2, wickets: 3, playersPerTeam: 11, mode: 'auto', play: 'over', superOver: true,
     noConsecutive: true, spectators: 'open', teamA: 'Lions', teamB: 'Tigers', copyFrom: '',
     days: 3, sessionsPerDay: 3, oversPerSession: 15, inningsPerTeam: 2, sessionMinutes: 0, lunch: true, tea: true, stumps: true, followOn: true,
+    participation: 'ai', teamSource: 'real', aiLevel: 'medium', xiSize: 11, allowSameTeam: false, realA: 'int-ind', realB: 'int-aus',
   });
   const [past, setPast] = useState([]);
+  const [teams, setTeams] = useState(null);
+  useEffect(() => { api('/api/cricket/teams').then(setTeams).catch(() => setTeams({ categories: [], teams: [], sync: {} })); }, []);
+  const oneVOne = f.participation !== 'team';
+  const real = oneVOne && f.teamSource === 'real';
+  const tA = teams?.teams.find((t) => t.id === f.realA), tB = teams?.teams.find((t) => t.id === f.realB);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => { api('/api/matches/mine').then((r) => setPast(r.matches)).catch(() => {}); }, []);
@@ -105,11 +113,15 @@ function CreateMatch() {
     setBusy(true); setErr('');
     try {
       const { format, overs, wickets, playersPerTeam, mode, play, superOver, noConsecutive, spectators,
-        days, sessionsPerDay, oversPerSession, inningsPerTeam, sessionMinutes, lunch, tea, stumps, followOn } = f;
+        days, sessionsPerDay, oversPerSession, inningsPerTeam, sessionMinutes, lunch, tea, stumps, followOn,
+        participation, teamSource, aiLevel, xiSize, allowSameTeam } = f;
+      const names = real ? [tA?.name, tB?.name] : [f.teamA, f.teamB];
       const r = await api('/api/matches', { body: {
-        name: f.name || `${f.teamA} v ${f.teamB}`, teamA: f.teamA, teamB: f.teamB, copyFrom: f.copyFrom || undefined,
+        name: f.name || `${names[0]} v ${names[1]}`, teamA: f.teamA, teamB: f.teamB, copyFrom: (!oneVOne && f.copyFrom) || undefined,
+        realTeams: real ? { A: f.realA, B: f.realB } : undefined,
         config: { format, overs, wickets, playersPerTeam, mode, play, superOver, noConsecutive, spectators,
-          days, sessionsPerDay, oversPerSession, inningsPerTeam, sessionMinutes, lunch, tea, stumps, followOn } } });
+          days, sessionsPerDay, oversPerSession, inningsPerTeam, sessionMinutes, lunch, tea, stumps, followOn,
+          participation, teamSource: oneVOne ? teamSource : 'custom', aiLevel, xiSize, allowSameTeam } } });
       nav(`/m/${r.id}`);
     } catch (x) { setErr(x.message); setBusy(false); }
   };
@@ -117,16 +129,63 @@ function CreateMatch() {
     <section className="panel mown p-5">
       <div className="flex items-baseline justify-between">
         <h2 className="font-display text-2xl font-bold">Create a match</h2>
-        <span className="text-sm text-chalk-dim">Step {step + 1} of {STEPS.length + 1}</span>
+        <span className="text-sm text-chalk-dim">Step {step + 1} of {STEPS.length}</span>
       </div>
       <ol className="mt-3 grid grid-cols-4 gap-1.5" aria-label="Steps">
-        {[...STEPS, 'Players'].map((s, i) => (
+        {STEPS.map((s, i) => (
           <li key={s} className={`border-t-4 pt-1 text-xs font-semibold ${i <= step ? 'border-flood text-chalk' : 'border-pitch-600 text-chalk-faint'}`}>{s}</li>
         ))}
       </ol>
 
       <div className="mt-4 space-y-4">
         {step === 0 && <>
+          <div>
+            <span className="label">Who's playing</span>
+            <div className="grid gap-2">
+              <Choice selected={f.participation === 'ai'} onClick={() => set('participation')('ai')} title="Me v the AI" body="Play one-v-one against the computer, at the level you choose." />
+              <Choice selected={f.participation === 'pvp'} onClick={() => set('participation')('pvp')} title="Me v a friend" body="One-v-one. Your friend joins from the link and takes the other side." />
+              <Choice selected={f.participation === 'team'} onClick={() => set('participation')('team')} title="Team match" body="Several people a side, with captains. Custom teams only." />
+            </div>
+          </div>
+          {oneVOne && (
+            <div>
+              <span className="label">Teams</span>
+              <div className="grid grid-cols-2 gap-2">
+                <Choice selected={f.teamSource === 'real'} onClick={() => set('teamSource')('real')} title="Real teams" body="International sides and IPL franchises with their squads." />
+                <Choice selected={f.teamSource === 'custom'} onClick={() => set('teamSource')('custom')} title="Custom teams" body="Name your own sides." />
+              </div>
+            </div>
+          )}
+          {real && (teams ? (
+            <>
+              <TeamPicker data={teams} value={f.realA} onChange={set('realA')} exclude={f.allowSameTeam ? null : f.realB} label="Your team" />
+              <TeamPicker data={teams} value={f.realB} onChange={set('realB')} exclude={f.allowSameTeam ? null : f.realA} label={f.participation === 'ai' ? "The AI's team" : "Your friend's team"} />
+              <Toggle label="Allow both sides to be the same team" checked={f.allowSameTeam} onChange={set('allowSameTeam')} />
+              <SyncNote data={teams} />
+            </>
+          ) : <p className="text-chalk-dim">Loading teams…</p>)}
+          {f.participation === 'ai' && (
+            <div>
+              <span className="label">AI difficulty</span>
+              <div className="grid grid-cols-4 gap-2">
+                {['easy', 'medium', 'hard', 'expert'].map((l) => (
+                  <button key={l} type="button" aria-pressed={f.aiLevel === l} onClick={() => set('aiLevel')(l)}
+                    className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${f.aiLevel === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-chalk-faint">{{ easy: 'Picks at random within the rules.', medium: 'Avoids obvious mistakes.', hard: 'Learns your habits and reads the match situation.', expert: 'Learns your patterns, plays the situation, stays hard to read.' }[f.aiLevel]}</p>
+            </div>
+          )}
+          {real && tA && tB && (
+            <div className="flex items-center justify-center gap-3 rounded-xl bg-pitch-900/60 p-3">
+              <TeamBadge team={tA} size={40} /><span className="font-display text-xl font-bold">{tA.name}</span>
+              <span className="text-chalk-faint">v</span>
+              <span className="font-display text-xl font-bold">{tB.name}</span><TeamBadge team={tB} size={40} />
+            </div>
+          )}
+          {real && f.realA === f.realB && !f.allowSameTeam && <p className="text-sm text-leather">Both sides have the same team. Pick a different one, or allow it above.</p>}
+        </>}
+        {step === 1 && <>
           <div><label className="label" htmlFor="mn">Match name</label><input id="mn" className="field" value={f.name} onChange={set('name')} placeholder={`${f.teamA} v ${f.teamB}`} maxLength={60} /></div>
           <div>
             <span className="label">Format</span>
@@ -142,9 +201,9 @@ function CreateMatch() {
               <div className="grid grid-cols-3 gap-3">
                 {f.format === 'custom' ? <Stepper label="Overs" value={f.overs} set={set('overs')} min={1} max={50} /> : <div><span className="label">Overs</span><div className="py-2 text-center font-display text-3xl font-bold">{f.overs}</div></div>}
                 <Stepper label="Wickets" value={f.wickets} set={set('wickets')} min={1} max={20} />
-                <Stepper label="Per side" value={f.playersPerTeam} set={set('playersPerTeam')} min={1} max={15} />
+                {real ? <Stepper label="Playing XI" value={f.xiSize} set={set('xiSize')} min={2} max={11} /> : oneVOne ? <div><span className="label">Per side</span><div className="py-2 text-center font-display text-3xl font-bold">1</div></div> : <Stepper label="Per side" value={f.playersPerTeam} set={set('playersPerTeam')} min={1} max={15} />}
               </div>
-              {f.format === 'custom' && (
+              {f.format === 'custom' && !oneVOne && (
                 <div className="flex flex-wrap gap-2 text-sm">
                   <span className="text-chalk-dim">Quick formats:</span>
                   {[['1 v 1 quickie', 1, 1, 1], ['3 a side', 3, 3, 3], ['5 a side', 5, 5, 5]].map(([l, o, w, p]) => (
@@ -163,7 +222,7 @@ function CreateMatch() {
               <p className="text-sm text-chalk-dim">{f.sessionsPerDay * f.oversPerSession} overs a day, {f.days * f.sessionsPerDay * f.oversPerSession} overs scheduled in all. A session ends after its overs (or when ended early); innings carry on across sessions and days.</p>
               <div className="grid grid-cols-3 gap-3">
                 <Stepper label="Wickets" value={f.wickets} set={set('wickets')} min={1} max={20} />
-                <Stepper label="Per side" value={f.playersPerTeam} set={set('playersPerTeam')} min={1} max={15} />
+                {real ? <Stepper label="Playing XI" value={f.xiSize} set={set('xiSize')} min={2} max={11} /> : oneVOne ? <div><span className="label">Per side</span><div className="py-2 text-center font-display text-3xl font-bold">1</div></div> : <Stepper label="Per side" value={f.playersPerTeam} set={set('playersPerTeam')} min={1} max={15} />}
                 <Stepper label="Time limit (min)" value={f.sessionMinutes} set={set('sessionMinutes')} min={0} max={240} />
               </div>
               <div>
@@ -183,7 +242,7 @@ function CreateMatch() {
           )}
         </>}
 
-        {step === 1 && <>
+        {step === 2 && <>
           <div>
             <span className="label">How players submit</span>
             <div className="grid gap-2 sm:grid-cols-2">
@@ -192,13 +251,13 @@ function CreateMatch() {
             </div>
             <p className="mt-1 text-xs text-chalk-faint">This can't be changed once the match is created.</p>
           </div>
-          <div>
+          {f.participation === 'ai' ? <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">Against the AI there's no umpire: the game runs itself.</p> : <div>
             <span className="label">Umpire</span>
             <div className="grid gap-2 sm:grid-cols-2">
               <Choice selected={f.mode === 'auto'} onClick={() => set('mode')('auto')} title="No umpire" body="The game runs itself: scoring, innings changes and the result are automatic." />
-              <Choice selected={f.mode === 'umpire'} onClick={() => set('mode')('umpire')} title="With umpire (you)" body="You start innings, can pause, correct mistakes and privately check the bowler's numbers." />
+              <Choice selected={f.mode === 'umpire'} onClick={() => set('mode')('umpire')} title="With umpire (you)" body={f.participation === 'pvp' ? 'You umpire; two friends play each other.' : "You start innings, can pause, correct mistakes and privately check the bowler's numbers."} />
             </div>
-          </div>
+          </div>}
           <div className="divide-y divide-pitch-600">
             <Toggle label="No bowling two overs in a row" checked={f.noConsecutive} onChange={set('noConsecutive')} />
             {f.format !== 'test' && <Toggle label="Super over on a tie" checked={f.superOver} onChange={set('superOver')} />}
@@ -212,8 +271,21 @@ function CreateMatch() {
           </div>
         </>}
 
-        {step === 2 && <>
-          {past.length > 0 && (
+        {step === 3 && real && tA && tB && <>
+          <div className="grid grid-cols-2 gap-3">
+            {[[tA, 'You'], [tB, f.participation === 'ai' ? `AI (${f.aiLevel})` : 'Your friend']].map(([t, who]) => (
+              <div key={who} className="rounded-xl bg-pitch-900/60 p-3 text-center">
+                <TeamBadge team={t} size={48} className="mx-auto" />
+                <div className="mt-1 font-display text-xl font-bold">{t.name}</div>
+                <div className="text-sm text-chalk-dim">{who}</div>
+                <div className="text-xs text-chalk-faint">{t.squadSize ? `${t.squadSize} in squad` : 'Stand-in players (squad not synced)'}</div>
+              </div>
+            ))}
+          </div>
+          <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">Next you'll pick your playing XI and batting order, confirm your lineup, and toss.{f.participation === 'pvp' ? ' Send your friend the link so they can take the other side.' : ''}</p>
+        </>}
+        {step === 3 && !real && <>
+          {past.length > 0 && !oneVOne && (
             <div>
               <label className="label" htmlFor="cp">Team selection</label>
               <select id="cp" className="field" value={f.copyFrom} onChange={(e) => pickPast(e.target.value)}>
@@ -234,8 +306,8 @@ function CreateMatch() {
       {err && <p className="mt-3 text-sm text-leather" role="alert">{err}</p>}
       <div className="mt-5 flex gap-2">
         {step > 0 && <button type="button" className="btn-ghost" onClick={() => setStep(step - 1)}>Back</button>}
-        {step < 2
-          ? <button type="button" className="btn-go flex-1 text-xl" onClick={() => setStep(step + 1)}>Next</button>
+        {step < 3
+          ? <button type="button" className="btn-go flex-1 text-xl" disabled={step === 0 && real && (!tA || !tB || (f.realA === f.realB && !f.allowSameTeam))} onClick={() => setStep(step + 1)}>Next</button>
           : <button type="button" className="btn-go flex-1 text-xl" disabled={busy} onClick={create}>Create match and get link</button>}
       </div>
     </section>
@@ -278,7 +350,8 @@ function MyMatches() {
           {rows.map((m) => (
             <li key={m.id}>
               <Link to={`/m/${m.id}`} className="flex items-center justify-between gap-3 py-3 hover:text-flood">
-                <span className="min-w-0">
+                <span className="flex shrink-0 -space-x-2">{m.badges?.map((b, i) => <TeamBadge key={i} team={b} size={28} />)}</span>
+                <span className="min-w-0 flex-1">
                   <span className="block truncate font-semibold">{m.name}</span>
                   <span className="block truncate text-sm text-chalk-dim">{m.result?.text || `${m.team_a} v ${m.team_b}`}{m.umpire ? ', you hosted' : ''}</span>
                 </span>

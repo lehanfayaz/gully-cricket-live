@@ -5,6 +5,7 @@ import Home from './pages/Home.jsx';
 import Match from './pages/Match.jsx';
 import Profile from './pages/Profile.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
+import Admin from './pages/Admin.jsx';
 
 const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
@@ -51,6 +52,7 @@ export default function App() {
             <Route path="/m/:id" element={<Match />} />
             <Route path="/u/:id" element={<Profile />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
+            <Route path="/admin" element={<Admin />} />
             <Route path="*" element={<div className="p-8 text-center text-chalk-dim">That page does not exist. <Link className="text-flood underline" to="/">Go home</Link></div>} />
           </Routes>
         </Shell>
@@ -75,6 +77,7 @@ function Shell({ children }) {
           <nav className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm font-medium text-chalk-dim">
             <Link to="/leaderboard" className="hover:text-chalk">Leaderboard</Link>
             {user && <Link to={`/u/${user.id}`} className="hover:text-chalk">My stats</Link>}
+            {user?.admin && <Link to="/admin" className="hover:text-chalk">Admin</Link>}
           </nav>
         </header>
       )}

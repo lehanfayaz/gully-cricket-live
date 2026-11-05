@@ -1,6 +1,8 @@
 // Broadcast-style score bug, the six-ball over strip, commentary and full scorecards.
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import TeamBadge from './TeamBadge.jsx';
+import { teamIdentity } from './Panels.jsx';
 
 export function ScoreBug({ state, online }) {
   const cur = state.current;
@@ -10,7 +12,7 @@ export function ScoreBug({ state, online }) {
     return (
       <div className="flex items-end justify-between px-4 py-3">
         <div className="min-w-0">
-          <div className="truncate font-display text-3xl font-extrabold leading-none">{state.teams.A.name} <span className="text-chalk-faint">v</span> {state.teams.B.name}</div>
+          <div className="flex items-center gap-2 truncate font-display text-3xl font-extrabold leading-none"><TeamBadge team={teamIdentity(state, 'A')} size={30} />{state.teams.A.name} <span className="text-chalk-faint">v</span> {state.teams.B.name}<TeamBadge team={teamIdentity(state, 'B')} size={30} /></div>
           <div className="mt-1 text-sm text-chalk-dim">{state.config.overs} over{state.config.overs > 1 ? 's' : ''} a side, {state.config.wickets} wicket{state.config.wickets > 1 ? 's' : ''}</div>
         </div>
         <Online n={online} />
@@ -28,7 +30,7 @@ export function ScoreBug({ state, online }) {
               {live && <span className="h-2 w-2 animate-pulse rounded-full bg-leather" aria-hidden />}
               <span className="truncate">{state.format === 'test' && state.test ? `Day ${state.test.day}, session ${state.test.session}, innings ${inn.number}` : inn.superOver ? 'Super over' : inn.number === 1 ? '1st innings' : '2nd innings'}{state.paused ? ', paused' : ''}{state.status === 'suspended' ? ', suspended' : ''}</span>
             </div>
-            <div className="truncate font-display text-xl font-bold leading-tight">{inn.battingName}</div>
+            <div className="flex items-center gap-2 truncate font-display text-xl font-bold leading-tight"><TeamBadge team={teamIdentity(state, inn.batting)} size={24} />{inn.battingName}</div>
           </div>
           <div className="ml-auto text-right">
             <div className="font-display text-5xl font-extrabold leading-none tabular-nums">{inn.runs}<span className="text-chalk-dim">/{inn.wickets}</span></div>
@@ -134,7 +136,7 @@ export function Scorecards({ state }) {
       {state.innings.map((inn) => (
         <section key={inn.number} className="panel overflow-hidden">
           <header className="flex items-baseline justify-between bg-pitch-700 px-4 py-2">
-            <h3 className="font-display text-xl font-bold">{inn.battingName}{inn.superOver ? ' (super over)' : ''}</h3>
+            <h3 className="flex items-center gap-2 font-display text-xl font-bold"><TeamBadge team={teamIdentity(state, inn.batting)} size={24} />{inn.battingName}{inn.superOver ? ' (super over)' : ''}</h3>
             <span className="font-display text-2xl font-extrabold tabular-nums">{inn.runs}/{inn.wickets} <span className="text-base font-medium text-chalk-dim">({inn.overs})</span></span>
           </header>
           <table className="w-full text-sm">

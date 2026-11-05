@@ -7,6 +7,11 @@ import { Server } from 'socket.io';
 import { get, all, run } from './db.js';
 import * as G from './engine.js';
 import { profile, leaderboard } from './stats.js';
+import * as CDB from './cricketdb.js';
+import * as SYNC from './sync.js';
+import { aiStep } from './ai.js';
+
+CDB.seedIfEmpty();
 
 const app = express();
 app.use(express.json({ limit: '32kb' }));
@@ -38,6 +43,10 @@ function auth(req, res, next) {
   next();
 }
 const needUser = (req, res, next) => (req.user ? next() : res.status(401).json({ error: 'Sign in first.' }));
+// Admins: registered usernames listed in ADMIN_USERNAMES (comma-separated) on the server.
+const adminNames = () => String(process.env.ADMIN_USERNAMES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+const isAdmin = (u) => !!u && !u.guest && !!u.username && adminNames().includes(u.username.toLowerCase());
+const needAdmin = (req, res, next) => (isAdmin(req.user) ? next() : res.status(403).json({ error: 'Only admins can do that.' }));
 app.use('/api', auth);
 
 const wrap = (fn) => (req, res) => {
@@ -80,7 +89,7 @@ app.post('/api/auth/login', wrap((req) => {
 }));
 
 app.post('/api/auth/logout', needUser, wrap((req) => { run('DELETE FROM sessions WHERE token = ?', req.token); return { ok: true }; }));
-app.get('/api/me', wrap((req) => ({ user: publicUser(req.user) })));
+app.get('/api/me', wrap((req) => ({ user: req.user ? { ...publicUser(req.user), admin: isAdmin(req.user) } : null })));
 
 app.patch('/api/me', needUser, wrap((req) => {
   const name = cleanName(req.body.name);
@@ -90,13 +99,18 @@ app.patch('/api/me', needUser, wrap((req) => {
 }));
 
 // ---------- matches ----------
+// Team identity for lists: real teams carry their badge; custom teams get a plain one.
+const badges = (m, ma, mb) => [[m.team_a, ma], [m.team_b, mb]].map(([name, meta]) => {
+  const x = meta ? JSON.parse(meta) : null;
+  return x ? { name: x.name, short: x.short, color: x.color, country: x.country, logo: x.logo } : { name, short: String(name).slice(0, 3).toUpperCase() };
+});
 app.post('/api/matches', needUser, wrap((req) => ({ id: G.createMatch(req.user.id, req.body || {}) })));
 
 app.get('/api/matches/mine', needUser, wrap((req) => ({
-  matches: all(`SELECT m.id, m.name, m.status, m.team_a, m.team_b, m.result, m.created_at, m.umpire_id = ? AS umpire
+  matches: all(`SELECT m.id, m.name, m.status, m.team_a, m.team_b, m.team_a_meta, m.team_b_meta, m.result, m.created_at, m.umpire_id = ? AS umpire
                 FROM members mb JOIN matches m ON m.id = mb.match_id WHERE mb.user_id = ? AND mb.banned = 0
                 ORDER BY m.created_at DESC LIMIT 30`, req.user.id, req.user.id)
-    .map((m) => ({ ...m, umpire: !!m.umpire, result: m.result ? JSON.parse(m.result) : null })),
+    .map(({ team_a_meta: ma, team_b_meta: mb, ...m }) => ({ ...m, umpire: !!m.umpire, result: m.result ? JSON.parse(m.result) : null, badges: badges(m, ma, mb) })),
 })));
 
 app.get('/api/matches/recent', wrap(() => ({
@@ -118,6 +132,21 @@ app.get('/api/users/:id', wrap((req) => {
 app.get('/api/leaderboard', wrap((req) => ({ sort: req.query.sort || 'points', rows: leaderboard(String(req.query.sort || 'points')) })));
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
+// ---------- real cricket teams (read: anyone; edit: admins) ----------
+const plain = (fn) => (req, res) => {
+  Promise.resolve().then(() => fn(req, res)).then((out) => out !== undefined && res.json(out))
+    .catch((e) => res.status(e instanceof G.GameError || e instanceof Error ? 400 : 500).json({ error: e.message || 'Something went wrong.' }));
+};
+app.get('/api/cricket/teams', plain(() => ({ ...CDB.listTeams(), provider: SYNC.providerName() })));
+app.get('/api/cricket/teams/:id', plain((req) => { const t = CDB.getTeam(req.params.id); if (!t) throw new Error('Team not found.'); return t; }));
+app.get('/api/admin/sync', needAdmin, plain(() => ({ status: CDB.syncStatus(), runs: CDB.recentSyncRuns(), provider: SYNC.providerName() })));
+app.post('/api/admin/sync', needAdmin, plain(async () => ({ result: await SYNC.runSync('manual'), status: CDB.syncStatus() })));
+app.get('/api/admin/teams', needAdmin, plain(() => CDB.listTeams({ includeInactive: true })));
+app.post('/api/admin/teams', needAdmin, plain((req) => ({ id: CDB.adminSaveTeam(req.body || {}) })));
+app.post('/api/admin/teams/:id/players', needAdmin, plain((req) => ({ id: CDB.adminAddPlayer(req.params.id, req.body || {}) })));
+app.patch('/api/admin/players/:id', needAdmin, plain((req) => { CDB.adminUpdatePlayer(Number(req.params.id), req.body || {}); return { ok: true }; }));
+app.delete('/api/admin/teams/:id/players/:pid', needAdmin, plain((req) => { CDB.adminRemovePlayer(req.params.id, Number(req.params.pid)); return { ok: true }; }));
+
 // ---------- static client ----------
 const dist = path.resolve('client/dist');
 if (fs.existsSync(dist)) {
@@ -137,9 +166,23 @@ const roomOf = (id) => `m:${id}`;
 const personal = (matchId, uid) => `mu:${matchId}:${uid}`;
 const lastMsgId = (matchId) => get('SELECT COALESCE(MAX(id),0) AS id FROM messages WHERE match_id = ?', matchId).id;
 
+// The AI takes its turn a moment after anything changes, through the same engine functions as a person.
+const aiTimers = new Map();
+function scheduleAI(matchId) {
+  if (aiTimers.has(matchId)) return;
+  aiTimers.set(matchId, setTimeout(async () => {
+    aiTimers.delete(matchId);
+    let r;
+    const since = lastMsgId(matchId);
+    try { r = aiStep(matchId); } catch (e) { if (!(e instanceof G.GameError)) console.error('AI error', e); return; }
+    if (r) { await broadcast(matchId, since, r.ctx); }
+  }, process.env.AI_DELAY_MS ? Number(process.env.AI_DELAY_MS) : 700 + Math.random() * 700));
+}
+
 async function broadcast(matchId, sinceMsgId, ctx) {
   const m = G.loadMatch(matchId);
   io.to(roomOf(matchId)).emit('state', G.publicState(matchId));
+  if (m.config.participation === 'ai') scheduleAI(matchId);
   const sockets = await io.in(roomOf(matchId)).fetchSockets();
   const seen = new Map();
   for (const s of sockets) {
@@ -152,7 +195,7 @@ async function broadcast(matchId, sinceMsgId, ctx) {
   }
   if (ctx) {
     for (const fx of ctx.fx) io.to(roomOf(matchId)).emit('fx', fx);
-    for (const n of ctx.notify) io.to(`u:${n.userId}`).emit('notify', { ...n, matchId });
+    for (const n of ctx.notify) io.to(`u:${G.controllerOf(matchId, n.userId) || n.userId}`).emit('notify', { ...n, matchId });
     for (const uid of ctx.kicked) {
       io.to(personal(matchId, uid)).emit('kicked', { matchId });
       for (const s of await io.in(personal(matchId, uid)).fetchSockets()) { s.leave(roomOf(matchId)); s.leave(personal(matchId, uid)); }
@@ -209,6 +252,7 @@ io.on('connection', (socket) => {
       socket.join(roomOf(matchId)); socket.join(personal(matchId, user.id));
       const m = G.loadMatch(matchId);
       ack({ ok: true, state: G.publicState(matchId), private: { matchId, ...G.privateState(matchId, user.id) }, chat: G.chatHistory(m, user.id) });
+      if (m.config.participation === 'ai') scheduleAI(matchId);
       if (isNew) await broadcast(matchId, since, null);
       await presence(matchId);
     } catch (e) {
@@ -263,6 +307,16 @@ io.on('connection', (socket) => {
     if (mid) setTimeout(() => presence(mid), 50);
   });
 });
+
+// Daily cricket data sync; failures are shown to admins.
+SYNC.setAlertHandler((text) => {
+  for (const name of adminNames()) {
+    const u = get('SELECT id FROM users WHERE username = ?', name);
+    if (u) io.to(`u:${u.id}`).emit('notify', { title: 'Cricket data', body: text, kind: 'info' });
+  }
+  console.warn(text);
+});
+if (process.env.NODE_ENV !== 'test') SYNC.startSchedule();
 
 const PORT = Number(process.env.PORT || 3000);
 server.listen(PORT, () => console.log(`FOOTY CRICKET LEAGUE on http://localhost:${PORT}`));

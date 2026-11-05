@@ -36,6 +36,24 @@ These rules live in `server/rules.js` and are enforced on the server; the pads o
 - **Innings** end on all out, a declaration (batting captain or umpire), or the chase. Follow-on margins: 200 (5 days), 150 (3–4), 100 (2), 75 (1). Innings victories are detected after the third innings.
 - **Dot-over rule:** a batter who plays out all six legal balls of an over without scoring must score off one of the first two legal balls of their next over. It survives breaks and suspensions, is cancelled if they're out or the innings ends, and is tracked per batter. If broken: no umpire, the batter is out (not credited to the bowler); with an umpire, play is held until the umpire gives them out or waives it.
 
+## Who plays: one-v-one, against the AI, or teams
+
+- **Me v the AI:** one human against the computer (easy, medium, hard, expert). The AI is an ordinary participant: it reads only what any opponent can see (the public match state and balls already revealed, never an open submission), and it submits through the same server functions and validation as a person. It confirms its lineup, calls and decides the toss, and handles the follow-on and Test declarations. No umpire in AI matches.
+- **Me v a friend:** one human each side; the friend takes the open side from the invite link. With an umpire, the creator umpires and two friends play.
+- **Team match:** the existing multiplayer teams with captains (custom teams only).
+
+In one-v-one matches you can play as a **real team** (international or IPL) or custom teams. With a real team you pick your playing XI from its squad, set the batting and bowling order and the captain on the field, then confirm. Each person plays every ball for their side; the roster players' names appear on the scoreboard.
+
+## Real teams and squads
+
+Team and squad data lives in its own tables (categories, seasons, teams, players, squads, sync runs) and is copied into each match when it's created, so later changes never alter finished matches.
+
+- **Source:** [CricketData.org](https://cricketdata.org) (licensed cricket data API; the ICC and IPL don't offer public APIs). Set `CRICKETDATA_API_KEY` on the server. The free plan (100 calls a day) is enough: a sync uses about 25.
+- **Schedule:** on start-up if due, then daily; after a failure it retries an hour later. Admins can run it by hand.
+- **What it does:** takes the latest IPL season's squads and each national team's most recent squad; adds new teams and players, records renames, transfers and releases, and never creates duplicate players (one record per provider id; a transfer moves their season assignment).
+- **Fallback:** a starter list of team names (`server/data/teams.seed.json`, no players) is used until the first sync. A team with no synced squad plays with clearly labelled stand-in players; no player names are invented.
+- **Admins** (registered usernames in `ADMIN_USERNAMES`, comma-separated) get an Admin page: sync status and history, Sync now, and editing of teams and squads. Admin edits are kept; the sync won't overwrite them. Sync failures are shown to admins.
+
 ## Umpire, host and captains
 
 - **No umpire**: fully automatic. The creator is the "host": they can moderate chat and end a match early, nothing more.

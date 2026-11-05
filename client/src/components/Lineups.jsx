@@ -3,6 +3,39 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { emit } from '../api.js';
 import { useApp } from '../App.jsx';
+import TeamBadge from './TeamBadge.jsx';
+import { teamIdentity } from './Panels.jsx';
+
+const ROLE_NAME = { bat: 'Batter', bowl: 'Bowler', ar: 'All-rounder', wk: 'Keeper' };
+
+// Real teams: choose the playing XI from the synced squad.
+function XIPicker({ state, team, onSave }) {
+  const meta = state.teamMeta[team];
+  const current = new Set(state.teams[team].players.map((p) => p.playerId).filter(Boolean));
+  const [pick, setPick] = useState(current);
+  const size = Math.min(state.config.xiSize, meta.squad.length);
+  if (meta.squad.length < 2) return <p className="rounded-lg bg-pitch-900/60 p-3 text-sm text-chalk-dim">This team's squad hasn't been synced yet, so it plays with numbered stand-in players.</p>;
+  const toggle = (id) => { const n = new Set(pick); n.has(id) ? n.delete(id) : n.size < size && n.add(id); setPick(n); };
+  return (
+    <details className="rounded-xl bg-pitch-900/50 p-3">
+      <summary className="cursor-pointer font-semibold">Playing XI: pick {size} from the squad of {meta.squad.length}</summary>
+      <ul className="mt-2 grid gap-1 sm:grid-cols-2">
+        {meta.squad.map((p) => (
+          <li key={p.playerId}>
+            <label className={`flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 ${pick.has(p.playerId) ? 'bg-turf/15 ring-1 ring-turf' : 'bg-pitch-800'}`}>
+              <input type="checkbox" className="accent-turf" checked={pick.has(p.playerId)} onChange={() => toggle(p.playerId)} />
+              {p.image ? <img src={p.image} alt="" className="h-7 w-7 rounded-full bg-pitch-600 object-cover" loading="lazy" /> : <span className="h-7 w-7 rounded-full bg-pitch-600" aria-hidden />}
+              <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
+              <span className="text-xs text-chalk-faint">{ROLE_NAME[p.role] || ''}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <button className="btn-go mt-2 w-full" disabled={pick.size !== size} onClick={() => onSave([...pick])}>{pick.size === size ? 'Use this XI' : `${size - pick.size} more to pick`}</button>
+      {meta.squadSyncedAt && <p className="mt-1 text-xs text-chalk-faint">Squad as of {new Date(meta.squadSyncedAt).toLocaleDateString()}, saved with this match.</p>}
+    </details>
+  );
+}
 
 // Drag (mouse or touch) by the handle to reorder. Arrow buttons do the same for keyboards.
 function SortableList({ items, keyOf, render, onCommit, enabled }) {
@@ -86,6 +119,8 @@ export function TeamLineup({ state, team, priv, me }) {
     return map;
   };
   const bat = card('batting'), bowl = card('bowling');
+  const real = state.teamSource === 'real';
+  const fieldCaptain = real ? state.teamMeta[team]?.captainId : state.captains[team];
   const confirm = async () => {
     const r = await emit('lineup:confirm', { matchId: state.id, team });
     if (!r.ok) toast({ title: 'Lineup not confirmed', body: r.error });
@@ -107,9 +142,10 @@ export function TeamLineup({ state, team, priv, me }) {
   return (
     <section className="panel space-y-4 p-4">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-display text-3xl font-extrabold">{t.name}</h2>
+        <h2 className="flex items-center gap-2 font-display text-3xl font-extrabold"><TeamBadge team={teamIdentity(state, team)} size={34} />{t.name}</h2>
         <span className="flex items-center gap-2 text-sm text-chalk-dim">
-          {isCaptain ? "You're captain" : `Captain: ${state.members.find((m) => m.id === state.captains[team])?.name || 'none yet'}`}
+          {real ? (isCaptain ? 'Your team' : `Played by ${state.members.find((m) => m.id === state.captains[team])?.name || 'nobody yet'}`)
+            : isCaptain ? "You're captain" : `Captain: ${state.members.find((m) => m.id === state.captains[team])?.name || 'none yet'}`}
           {state.status === 'lobby' && (state.lineups[team].confirmedAt
             ? <Tag tone="live">Confirmed</Tag> : <Tag>Pending</Tag>)}
         </span>
@@ -121,6 +157,18 @@ export function TeamLineup({ state, team, priv, me }) {
       )}
       {!t.players.length && <p className="text-chalk-dim">No players yet.</p>}
 
+      {real && can && state.status === 'lobby' && !state.toss.result && (
+        <>
+          <XIPicker state={state} team={team} onSave={(ids) => act({ type: 'select_xi', playerIds: ids })} />
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-chalk-dim">Captain on the field</span>
+            <select className="field w-auto py-1.5" value={fieldCaptain || ''} onChange={(e) => act({ type: 'xi_captain', userId: e.target.value })}>
+              <option value="" disabled>Choose</option>
+              {t.players.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+        </>
+      )}
       {t.players.length > 0 && (
         <div>
           <h3 className="mb-1.5 flex items-baseline justify-between font-display text-xl font-bold">
@@ -136,7 +184,7 @@ export function TeamLineup({ state, team, priv, me }) {
               return (
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <Link to={`/u/${p.id}`} className="truncate font-semibold hover:text-flood">{p.name}</Link>
-                  {state.captains[team] === p.id && <Tag tone="cap">C</Tag>}
+                  {fieldCaptain === p.id && <Tag tone="cap">C</Tag>}
                   {i < 2 && order.length > 1 && <Tag>Opener</Tag>}
                   {onStrike && <Tag tone="live">On strike</Tag>}
                   {!onStrike && outs > 0 && <Tag tone="out">Out{outs > 1 ? ` ×${outs}` : ''}</Tag>}
@@ -208,7 +256,7 @@ export function TeamLineup({ state, team, priv, me }) {
         </div>
       )}
 
-      {can && state.status === 'lobby' && !state.toss.result && (
+      {can && !real && state.participation === 'team' && state.status === 'lobby' && !state.toss.result && (
         <details className="rounded-xl bg-pitch-900/50 p-3">
           <summary className="cursor-pointer font-semibold">Squad changes</summary>
           <div className="mt-3 space-y-3 text-sm">

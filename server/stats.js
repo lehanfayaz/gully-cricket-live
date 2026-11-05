@@ -68,7 +68,7 @@ export function leaderboard(sort = 'runs') {
       COALESCE(bowl.wickets,0) AS wickets, COALESCE(bowl.balls,0) AS bowled, COALESCE(bowl.conceded,0) AS conceded,
       COALESCE(rec.matches,0) AS matches, COALESCE(rec.wins,0) AS wins
     FROM users u LEFT JOIN bat ON bat.id = u.id LEFT JOIN bowl ON bowl.id = u.id LEFT JOIN rec ON rec.id = u.id
-    WHERE bat.id IS NOT NULL OR bowl.id IS NOT NULL`);
+    WHERE (bat.id IS NOT NULL OR bowl.id IS NOT NULL) AND u.is_ghost = 0 AND u.is_bot = 0`);
   for (const r of rows) {
     r.strikeRate = r.balls ? +((r.runs * 100) / r.balls).toFixed(1) : 0;
     r.average = r.outs ? +(r.runs / r.outs).toFixed(2) : r.runs;

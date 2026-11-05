@@ -104,7 +104,11 @@ const badges = (m, ma, mb) => [[m.team_a, ma], [m.team_b, mb]].map(([name, meta]
   const x = meta ? JSON.parse(meta) : null;
   return x ? { name: x.name, short: x.short, color: x.color, country: x.country, logo: x.logo } : { name, short: String(name).slice(0, 3).toUpperCase() };
 });
-app.post('/api/matches', needUser, wrap((req) => ({ id: G.createMatch(req.user.id, req.body || {}) })));
+app.post('/api/matches', needUser, wrap((req) => {
+  const body = req.body || {};
+  const quick = body.quick ? { start: ['bat', 'bowl'].includes(body.quick.start) ? body.quick.start : 'toss' } : null;
+  return { id: G.createMatch(req.user.id, { ...body, quick }) };
+}));
 
 app.get('/api/matches/mine', needUser, wrap((req) => ({
   matches: all(`SELECT m.id, m.name, m.status, m.team_a, m.team_b, m.team_a_meta, m.team_b_meta, m.result, m.created_at, m.umpire_id = ? AS umpire

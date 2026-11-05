@@ -19,6 +19,7 @@ export default function Home() {
     <div className="grid gap-5 px-4 pb-12 pt-4 lg:grid-cols-[1.1fr_1fr]">
       <div className="space-y-5">
         <Hero compact />
+        <QuickMatch />
         <CreateMatch />
       </div>
       <div className="space-y-5">
@@ -310,6 +311,105 @@ function CreateMatch() {
           ? <button type="button" className="btn-go flex-1 text-xl" disabled={step === 0 && real && (!tA || !tB || (f.realA === f.realB && !f.allowSameTeam))} onClick={() => setStep(step + 1)}>Next</button>
           : <button type="button" className="btn-go flex-1 text-xl" disabled={busy} onClick={create}>Create match and get link</button>}
       </div>
+    </section>
+  );
+}
+
+const QUICK = [
+  { id: '1', title: '1-over challenge', overs: 1, wickets: 2 },
+  { id: '2', title: '2 overs', overs: 2, wickets: 3 },
+  { id: '5', title: '5 overs', overs: 5, wickets: 5 },
+  { id: '10', title: '10 overs', overs: 10, wickets: 10 },
+  { id: 'custom', title: 'Custom overs', overs: 3, wickets: 3 },
+  { id: 't20', title: 'T20', format: 't20', overs: 20, wickets: 10 },
+  { id: 'odi', title: 'ODI', format: 'odi', overs: 50, wickets: 10 },
+  { id: 'test', title: 'Test match', format: 'test', wickets: 10 },
+];
+
+// Quick Match: you against the AI in a couple of taps. Same engine, same history, same rules.
+function QuickMatch() {
+  const nav = useNavigate();
+  const [teams, setTeams] = useState(null);
+  const [pick, setPick] = useState(null);
+  const [f, setF] = useState({ real: true, mine: 'int-ind', theirs: 'int-aus', myName: 'My XI', level: 'medium', overs: 3, days: 1, oversPerSession: 10, play: 'over', start: 'toss' });
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api('/api/cricket/teams').then(setTeams).catch(() => setTeams(null)); }, []);
+  const set = (k) => (v) => setF((x) => ({ ...x, [k]: v?.target ? v.target.value : v }));
+  const preset = QUICK.find((q) => q.id === pick);
+  const go = async () => {
+    setBusy(true); setErr('');
+    const overs = preset.id === 'custom' ? Number(f.overs) : preset.overs;
+    const config = {
+      format: preset.format || 'custom', overs, wickets: preset.id === 'custom' ? Math.min(10, Math.max(1, Math.ceil(overs))) : preset.wickets,
+      play: f.play, aiLevel: f.level, teamSource: f.real ? 'real' : 'custom',
+      ...(preset.format === 'test' ? { days: Number(f.days), sessionsPerDay: 2, oversPerSession: Number(f.oversPerSession), inningsPerTeam: 2 } : {}),
+    };
+    try {
+      const r = await api('/api/matches', { body: {
+        name: `${preset.title}: ${f.real ? `${teams.teams.find((t) => t.id === f.mine)?.short} v ${teams.teams.find((t) => t.id === f.theirs)?.short}` : `${f.myName} v AI`}`,
+        teamA: f.myName, teamB: 'AI XI', realTeams: f.real ? { A: f.mine, B: f.theirs } : undefined, quick: { start: f.start }, config } });
+      nav(`/m/${r.id}`);
+    } catch (x) { setErr(x.message); setBusy(false); }
+  };
+  return (
+    <section className="panel p-5" aria-label="Quick match">
+      <h2 className="font-display text-2xl font-bold">Quick match</h2>
+      <p className="text-sm text-chalk-dim">You against the AI. Pick a length and play.</p>
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {QUICK.map((q) => (
+          <button key={q.id} type="button" aria-pressed={pick === q.id} onClick={() => setPick(pick === q.id ? null : q.id)}
+            className={`rounded-xl px-1 py-3 font-display text-base font-bold leading-tight ring-2 ${pick === q.id ? 'bg-flood text-pitch-900 ring-flood' : 'bg-pitch-900/60 ring-pitch-600 hover:ring-pitch-500'}`}>{q.title}</button>
+        ))}
+      </div>
+      {preset && (
+        <div className="mt-4 space-y-3">
+          {preset.id === 'custom' && <Stepper label="Overs" value={Number(f.overs)} set={set('overs')} min={1} max={50} />}
+          {preset.format === 'test' && (
+            <div className="grid grid-cols-2 gap-3">
+              <Stepper label="Days" value={Number(f.days)} set={set('days')} min={1} max={5} />
+              <Stepper label="Overs a session" value={Number(f.oversPerSession)} set={set('oversPerSession')} min={1} max={30} />
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            <Choice selected={f.real} onClick={() => set('real')(true)} title="Real teams" body="International or IPL" />
+            <Choice selected={!f.real} onClick={() => set('real')(false)} title="My own team" body="Name it yourself" />
+          </div>
+          {f.real && teams ? (
+            <>
+              <TeamPicker data={teams} value={f.mine} onChange={set('mine')} exclude={f.theirs} label="Your team" />
+              <TeamPicker data={teams} value={f.theirs} onChange={set('theirs')} exclude={f.mine} label="AI opponent" />
+            </>
+          ) : !f.real && <div><label className="label" htmlFor="qn">Team name</label><input id="qn" className="field" value={f.myName} onChange={set('myName')} maxLength={30} /></div>}
+          <div>
+            <span className="label">AI difficulty</span>
+            <div className="grid grid-cols-4 gap-2">
+              {['easy', 'medium', 'hard', 'expert'].map((l) => (
+                <button key={l} type="button" aria-pressed={f.level === l} onClick={() => set('level')(l)}
+                  className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${f.level === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <span className="label">How you submit</span>
+              <div className="grid grid-cols-2 gap-1">
+                {[['over', 'Whole over'], ['ball', 'Ball by ball']].map(([k, l]) => <button key={k} type="button" aria-pressed={f.play === k} onClick={() => set('play')(k)} className={`rounded-lg py-2 text-sm font-semibold ${f.play === k ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>)}
+              </div>
+            </div>
+            <div>
+              <span className="label">Start</span>
+              <div className="grid grid-cols-3 gap-1">
+                {[['toss', 'Toss'], ['bat', 'Bat'], ['bowl', 'Bowl']].map(([k, l]) => <button key={k} type="button" aria-pressed={f.start === k} onClick={() => set('start')(k)} className={`rounded-lg py-2 text-sm font-semibold ${f.start === k ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>)}
+              </div>
+            </div>
+          </div>
+          {err && <p className="text-sm text-leather" role="alert">{err}</p>}
+          <button type="button" className="btn-flood w-full text-xl" disabled={busy || (f.real && (!teams || f.mine === f.theirs))} onClick={go}>
+            Play {preset.title}{f.real && teams ? `: ${teams.teams.find((t) => t.id === f.mine)?.name} v ${teams.teams.find((t) => t.id === f.theirs)?.name}` : ''}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

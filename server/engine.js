@@ -30,6 +30,7 @@ export const DEFAULT_CONFIG = {
   aiLevel: 'medium',        // easy | medium | hard | expert
   xiSize: 11,               // players picked from a real squad
   allowSameTeam: false,
+  quick: false,             // created from Quick Match (labels only; same engine)
   overs: 2,
   wickets: 3,
   playersPerTeam: 11,
@@ -54,7 +55,7 @@ export function sanitizeConfig(input = {}, base = DEFAULT_CONFIG) {
   c.oversPerSession = int(input.oversPerSession, 1, 90, c.oversPerSession);
   c.inningsPerTeam = int(input.inningsPerTeam, 1, 2, c.inningsPerTeam);
   c.sessionMinutes = int(input.sessionMinutes, 0, 240, c.sessionMinutes);
-  for (const k of ['lunch', 'tea', 'stumps', 'followOn', 'allowSameTeam']) if (k in input) c[k] = !!input[k];
+  for (const k of ['lunch', 'tea', 'stumps', 'followOn', 'allowSameTeam', 'quick']) if (k in input) c[k] = !!input[k];
   if (['team', 'pvp', 'ai'].includes(input.participation)) c.participation = input.participation;
   if (['easy', 'medium', 'hard', 'expert'].includes(input.aiLevel)) c.aiLevel = input.aiLevel;
   c.teamSource = input.teamSource === 'real' && c.participation !== 'team' ? 'real' : 'custom';
@@ -153,9 +154,9 @@ function newCode() {
   }
 }
 
-export function createMatch(userId, { name, teamA, teamB, config, copyFrom, realTeams }) {
+export function createMatch(userId, { name, teamA, teamB, config, copyFrom, realTeams, quick }) {
   const id = newCode();
-  const cfg = sanitizeConfig(config);
+  const cfg = sanitizeConfig(quick ? { ...config, participation: 'ai', quick: true } : config);
   // Real international/IPL teams are only for one-v-one matches.
   if (realTeams && cfg.participation === 'team') fail('Real cricket teams are only available in one-v-one matches.');
   if (cfg.teamSource === 'real') {
@@ -187,6 +188,7 @@ export function createMatch(userId, { name, teamA, teamB, config, copyFrom, real
       fixCaptains(id);
     }
     if (cfg.participation !== 'team') setupOneVOne(id, userId, cfg, realA, realB);
+    if (quick) startQuick(id, userId, quick.start);
     announce(id, cfg.participation === 'ai'
       ? `Match created: you v the AI (${cfg.aiLevel}).`
       : cfg.mode === 'umpire'
@@ -268,6 +270,23 @@ function setupOneVOne(matchId, userId, cfg, realA, realB) {
     }
   }
   fixCaptains(matchId);
+}
+
+// Quick Match: both lineups go in as picked (the default XI), then either the normal toss
+// or straight into the match with the player's own choice of batting or bowling first.
+function startQuick(matchId, userId, start) {
+  run('UPDATE matches SET confirm_a = ?, confirm_b = ? WHERE id = ?', now(), now(), matchId);
+  const m = loadMatch(matchId);
+  if (start === 'bat' || start === 'bowl') {
+    run(`UPDATE matches SET toss_caller = 'A', toss_call = 'skipped', toss_result = 'skipped', toss_winner = 'A', toss_decision = ?, toss_bat = ?, toss_at = ? WHERE id = ?`,
+      start, start === 'bat' ? 'A' : 'B', now(), matchId);
+    record(matchId, userId, 'quick_start', `Quick match: ${userName(userId)} chose to ${start} first (no toss).`, { start }, true);
+    beginMatch(loadMatch(matchId), userId, newCtx());
+  } else {
+    const caller = crypto.randomInt(2) === 0 ? 'A' : 'B';
+    run('UPDATE matches SET toss_caller = ? WHERE id = ?', caller, matchId);
+    announce(matchId, `Quick match: lineups are set. ${teamName(m, caller)} call the toss.`, { type: 'toss_ready' });
+  }
 }
 
 // A second human takes the open side in a one-v-one real-team match.

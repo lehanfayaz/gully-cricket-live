@@ -198,6 +198,50 @@ await solo.open(m3);
 st = await until(() => solo.last()?.lineups?.B.confirmedAt && solo.last(), 'custom AI confirms');
 assert.equal(st.teams.A.players[0].id, solo.user.id); assert.ok(st.teams.B.players[0].bot);
 
+// ===== 6. Quick Match =====
+const q = await client('Quick');
+// 1-over challenge, India v Australia, bat first: live straight away, no toss.
+const qm = (await api('/api/matches', { realTeams: { A: 'int-ind', B: 'int-aus' }, quick: { start: 'bat' }, config: { teamSource: 'real', overs: 1, wickets: 2, aiLevel: 'expert' } }, q.token)).id;
+await q.open(qm);
+st = await until(() => q.last() || null, 'quick state').catch(async () => (await q.emit('match:open', { matchId: qm })).state);
+st = (await q.emit('match:open', { matchId: qm })).state;
+assert.equal(st.status, 'live'); assert.equal(st.participation, 'ai'); assert.equal(st.config.quick, true);
+assert.equal(st.innings[0].batting, 'A', 'chose to bat first');
+assert.ok(st.history.some((h) => /chose to bat first \(no toss\)/.test(h.text)));
+const mineQ = (s, pid) => s.members.find((x) => x.id === pid)?.controller === q.user.id;
+safety = 0;
+while (q.last()?.status !== 'completed' && safety++ < 150) {
+  const s = q.last(); const cur = s?.current;
+  if (s && s.status === 'live' && cur) {
+    const bowlerId = cur.open ? cur.set.bowlerId : cur.bowlerId, batterId = cur.open ? cur.set.batterId : cur.strikerId;
+    const priv = q.privates[q.privates.length - 1];
+    if (!priv?.myLocked && (mineQ(s, bowlerId) || mineQ(s, batterId))) {
+      const role = mineQ(s, bowlerId) ? 'bowl' : 'bat';
+      const allowed = [1, 2, 3, 4, 5, 6].filter((d) => !checkDigits({ format: 'custom' }, 'bowl', [d], cur.bowledThisOver));
+      const seq = role === 'bowl' ? Array.from({ length: cur.cap }, (_, i) => [1, 1, 2, 2, 3, 3][i]).map((d, i) => (i === 0 ? allowed[0] : d)) : Array(cur.cap).fill(6);
+      const r = await q.emit('over:submit', { sequence: seq });
+      if (!r.ok && !/already locked|isn't your turn/.test(r.error)) {
+        // repetition clash with balls already bowled this over: use a guaranteed-valid sequence
+        const safe = []; for (let i = 0; i < cur.cap; i++) safe.push([1, 2, 3, 4, 5, 6].find((d) => !checkDigits({ format: 'custom' }, 'bowl', [...safe, d], cur.bowledThisOver)));
+        await q.emit('over:submit', { sequence: role === 'bowl' ? safe : Array(cur.cap).fill(6) });
+      }
+    }
+  }
+  await wait(40);
+}
+assert.equal(q.last().status, 'completed', 'quick 1-over match finishes');
+const myMatches = await api('/api/matches/mine', undefined, q.token);
+assert.equal(myMatches.matches[0].status, 'completed', 'quick match saved to history');
+// With the toss: lineups are set, the toss is ready.
+const qt = (await api('/api/matches', { teamA: 'Me', teamB: 'Bot', quick: { start: 'toss' }, config: { overs: 2, wickets: 2 } }, q.token)).id;
+st = (await q.emit('match:open', { matchId: qt })).state;
+assert.equal(st.stage, 'toss_call'); assert.ok(st.lineups.A.confirmedAt && st.lineups.B.confirmedAt);
+// Quick Test match: live, sessions running.
+const qtest = (await api('/api/matches', { realTeams: { A: 'ipl-csk', B: 'ipl-mi' }, quick: { start: 'bowl' }, config: { teamSource: 'real', format: 'test', days: 1, sessionsPerDay: 2, oversPerSession: 5 } }, q.token)).id;
+st = (await q.emit('match:open', { matchId: qtest })).state;
+assert.equal(st.status, 'live'); assert.equal(st.format, 'test'); assert.equal(st.test.session, 1); assert.equal(st.innings[0].batting, 'B', 'chose to bowl first');
+q.s.disconnect();
+
 console.log('✔ all AI and real-team tests passed');
 for (const c of [hum, p1, p2, watcher, solo]) c.s.disconnect();
 server.close(); mock.close(); process.exit(0);

@@ -260,5 +260,5 @@ io.on('connection', (socket) => {
 });
 
 const PORT = Number(process.env.PORT || 3000);
-server.listen(PORT, () => console.log(`Gully Cricket Live on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`FOOTY CRICKET LEAGUE on http://localhost:${PORT}`));
 export { server };

@@ -9,6 +9,7 @@ import Admin from './pages/Admin.jsx';
 import MatchStats from './pages/MatchStats.jsx';
 import Tournament from './pages/Tournament.jsx';
 import TournamentNew from './pages/TournamentNew.jsx';
+import { PresentationSettings } from './components/Broadcast.jsx';
 
 const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
@@ -56,6 +57,7 @@ export default function App() {
             <Route path="/m/:id/stats" element={<MatchStats />} />
             <Route path="/t/new" element={<TournamentNew />} />
             <Route path="/t/:id" element={<Tournament />} />
+            <Route path="/settings" element={<div className="px-4 pb-12 pt-2"><section className="panel mx-auto max-w-xl p-5"><PresentationSettings /></section></div>} />
             <Route path="/u/:id" element={<Profile />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/admin" element={<Admin />} />
@@ -78,11 +80,12 @@ function Shell({ children }) {
         <header className="flex items-center justify-between px-4 pb-2 pt-4">
           <Link to="/" className="flex items-center gap-2">
             <span className="h-7 w-7"><div className="ball"><div className="ball-inner"><div className="ball-face" /></div></div></span>
-            <span className="font-display text-xl font-extrabold leading-[0.95] sm:text-2xl">FOOTY CRICKET <span className="text-flood">LEAGUE</span></span>
+            <span className="font-display text-lg font-extrabold leading-[0.95] sm:text-2xl">FOOTY CRICKET <span className="text-flood">LEAGUE</span></span>
           </Link>
-          <nav className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm font-medium text-chalk-dim">
+          <nav className="flex shrink-0 items-center gap-3 whitespace-nowrap text-sm font-medium text-chalk-dim sm:gap-4">
             <Link to="/leaderboard" className="hover:text-chalk">Leaderboard</Link>
             {user && <Link to={`/u/${user.id}`} className="hover:text-chalk">My stats</Link>}
+            <Link to="/settings" className="hover:text-chalk" aria-label="Presentation settings">⚙</Link>
             {user?.admin && <Link to="/admin" className="hover:text-chalk">Admin</Link>}
           </nav>
         </header>

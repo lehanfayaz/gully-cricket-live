@@ -90,9 +90,10 @@ function loadMatchRecord(matchId) {
       WHERE i.match_id = ? ORDER BY i.number, b.id`, matchId);
   // Umpire run adjustments are not deliveries; they are placed in the innings they were made in, at the time they were made.
   const adjustments = all(`SELECT detail, created_at FROM audit WHERE match_id = ? AND action = 'adjust_runs' ORDER BY id`, matchId)
-    .map((a) => ({ delta: parse(a.detail, {}).delta || 0, reason: parse(a.detail, {}).reason || 'Umpire adjustment', at: a.created_at }))
+    .map((a) => ({ delta: parse(a.detail, {}).delta || 0, reason: parse(a.detail, {}).reason || 'Umpire adjustment', at: a.created_at, inningsId: parse(a.detail, {}).inningsId }))
     .filter((a) => a.delta);
-  for (const a of adjustments) a.inningsId = [...innings].reverse().find((i) => i.started_at <= a.at)?.id ?? innings[0]?.id;
+  // Older records don't name the innings: use the one that had started by then.
+  for (const a of adjustments) a.inningsId ??= [...innings].reverse().find((i) => i.started_at <= a.at)?.id ?? innings[0]?.id;
   const controllers = Object.fromEntries(all('SELECT user_id, controller_id FROM members WHERE match_id = ? AND controller_id IS NOT NULL', matchId).map((r) => [r.user_id, r.controller_id]));
   return { m, innings, balls, adjustments, names: teamNames(m), controllers };
 }
@@ -104,7 +105,7 @@ function inningsAnalysis(rec, inn) {
   const placed = adj.reduce((s, a) => s + a.delta, 0);
   // Adjustments whose time wasn't recorded (older matches) still count, as one unplaced entry.
   if (placed !== inn.extras) adj.push({ delta: inn.extras - placed, reason: 'Umpire adjustment (time not recorded)', at: Infinity, inningsId: inn.id });
-  const adjBefore = (t) => adj.filter((a) => a.at <= t).reduce((s, a) => s + a.delta, 0);
+  const adjBefore = (t) => adj.filter((a) => a.at < t).reduce((s, a) => s + a.delta, 0);
 
   let runs = 0, wkts = 0;
   const fow = [], overList = [], progression = [];
@@ -222,8 +223,8 @@ export function replay(matchId) {
     const adj = ia.adjustmentList.map((x, i) => ({ ...x, at: rec.adjustments.filter((y) => y.inningsId === inn.id)[i]?.at ?? Infinity }));
     frames.push({ type: 'innings_start', innings: inn.number, superOver: !!inn.super_over, batting: rec.names[inn.batting], bowling: rec.names[inn.bowling], target: inn.target });
     let runs = 0, wkts = 0, legal = 0, session = null, overRuns = 0, overWkts = 0, ai = 0;
-    const flushAdj = (t) => {
-      while (ai < adj.length && adj[ai].at <= t) {
+    const flushAdj = (t, all_ = false) => {
+      while (ai < adj.length && (all_ || adj[ai].at < t)) {
         runs += adj[ai].delta;
         frames.push({ type: 'adjustment', innings: inn.number, delta: adj[ai].delta, reason: adj[ai].reason, score: { runs, wickets: wkts } });
         ai++;
@@ -253,7 +254,7 @@ export function replay(matchId) {
         overRuns = 0; overWkts = 0;
       }
     }
-    flushAdj(Infinity);
+    flushAdj(Infinity, true); // whatever is left, including adjustments with no recorded time
     if (legal % 6 && inn.status === 'done') frames.push({ type: 'over_end', innings: inn.number, over: Math.ceil(legal / 6), partial: true, runs: overRuns, wickets: overWkts, score: { runs, wickets: wkts, overs: overs(legal) } });
     if (inn.status === 'done') frames.push({ type: 'innings_end', innings: inn.number, team: rec.names[inn.batting], reason: inn.end_reason || null, declared: !!inn.declared, score: { runs, wickets: wkts, overs: overs(legal) } });
   }
@@ -318,7 +319,7 @@ export function highlights(matchId, analysis = matchAnalysis(matchId)) {
 // ---------- careers ----------
 // A person's deliveries: balls they played themselves, or as the controller of a real-team squad player.
 // Completed matches only; super overs are kept out of career figures, as in real cricket.
-function careerBalls(userId) {
+export function careerBalls(userId) {
   return all(`SELECT b.*, i.match_id, i.number AS inn_no, ub.display_name AS batter_name, uw.display_name AS bowler_name,
         COALESCE(bm.controller_id, b.batter_id) AS bat_owner, COALESCE(wm.controller_id, b.bowler_id) AS bowl_owner
       FROM balls b JOIN innings i ON i.id = b.innings_id JOIN matches m ON m.id = i.match_id
@@ -330,7 +331,7 @@ function careerBalls(userId) {
       ORDER BY b.id`, userId, userId);
 }
 
-function careerMatches(userId) {
+export function careerMatches(userId) {
   return all(`SELECT m.id, m.name, m.config, m.result, m.ended_at, m.team_a, m.team_b, m.team_a_meta, m.team_b_meta, mb.team
       FROM members mb JOIN matches m ON m.id = mb.match_id
       WHERE mb.user_id = ? AND m.status = 'completed' AND mb.team IS NOT NULL ORDER BY m.ended_at DESC`, userId)
@@ -338,7 +339,10 @@ function careerMatches(userId) {
       const config = parse(r.config, {}), result = parse(r.result, {}) || {};
       const names = teamNames(r);
       const outcome = result.tie ? 'tie' : result.draw ? 'draw' : result.winner ? (result.winner === r.team ? 'won' : 'lost') : 'no result';
+      const myMeta = parse(r.team === 'A' ? r.team_a_meta : r.team_b_meta);
       return { id: r.id, name: r.name, endedAt: r.ended_at, format: config.format || 'custom', quick: !!config.quick, team: names[r.team], opponent: names[r.team === 'A' ? 'B' : 'A'],
+        side: r.team, overs: config.format === 'test' ? null : config.overs ?? null, teamCategory: myMeta?.category || (myMeta?.source === 'custom' ? 'custom' : myMeta ? myMeta.category : 'custom'),
+        participation: config.participation || 'team', tournamentId: config.tournament?.id || null, tie: !!result.tie, drawn: !!result.draw,
         vsAI: config.participation === 'ai', aiLevel: config.aiLevel || null, aiPersonality: config.aiPersonality || (config.participation === 'ai' ? 'strategic' : null), outcome, result: result.text || null };
     });
 }

@@ -10,6 +10,9 @@ import { SessionHistory, TestDashboard } from '../components/TestPanel.jsx';
 import Chat from '../components/Chat.jsx';
 import UmpirePanel from '../components/Umpire.jsx';
 import { Cheers, FxOverlay } from '../components/Fx.jsx';
+import { Moments, SettingsSheet, Stadium, StadiumBand } from '../components/Broadcast.jsx';
+import { animationsOn, setSettings, useSettings } from '../settings.js';
+import { applyVolumes, sfx, startAmbience, stopAmbience, unlock } from '../sound.js';
 
 export default function Match() {
   const { id: raw } = useParams();
@@ -36,6 +39,11 @@ function Live({ id, me }) {
   const [alerts, setAlerts] = useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
   const fxTimer = useRef();
   const revealEnd = useRef(0);
+  const settings = useSettings();
+  const [sheet, setSheet] = useState(false);
+  // Stadium ambience while you're on the match screen (only if sound is on).
+  useEffect(() => { if (settings.sound.muted) stopAmbience(); else { startAmbience(); applyVolumes(); } }, [settings.sound.muted]);
+  useEffect(() => () => stopAmbience(), []);
 
   useEffect(() => {
     const s = getSocket();
@@ -63,9 +71,12 @@ function Live({ id, me }) {
         revealEnd.current = end;
         const pick = f.wicket ? 'wicket' : f.balls.some((b) => b.runs === 6) ? 'six' : f.balls.some((b) => b.runs === 4) ? 'four' : null;
         if (pick) show({ type: pick, batter: f.batter }, end);
+        // Sounds follow the flip of each ball, then the big moment. (The score has already updated.)
+        f.balls.forEach((b, i) => setTimeout(() => sfx.tick(), i * REVEAL_STEP));
+        setTimeout(() => (f.wicket ? sfx.wicket() : pick === 'six' ? sfx.six() : pick === 'four' ? sfx.four() : null), Math.max(0, end - Date.now()));
         return;
       }
-      if (f.type === 'toss') return; // the coin animates in the toss panel
+      if (f.type === 'toss') { sfx.coin(); return; } // the coin animates in the toss panel
       show(f, Math.max(Date.now(), revealEnd.current + (f.type === 'result' || f.type === 'tie' ? 1900 : 0)));
     };
     const onCheer = (c) => {
@@ -111,6 +122,7 @@ function Live({ id, me }) {
 
   return (
     <div className="flex min-h-dvh flex-col pb-16 lg:pb-0">
+      <Stadium teams={{ A: state.teamMeta?.A, B: state.teamMeta?.B }} />
       <div className="sticky top-0 z-20 bg-pitch-900/95 shadow-lg backdrop-blur">
         <div className="flex items-center gap-3 px-3 pt-2">
           <Link to="/" aria-label="Home" className="rounded-lg px-2 py-1 text-xl text-chalk-dim hover:bg-pitch-700">‹</Link>
@@ -120,6 +132,9 @@ function Live({ id, me }) {
               onClick={async () => setAlerts(await Notification.requestPermission())}>Turn on turn alerts</button>
           )}
           {!connected && <span className="rounded-full bg-leather px-2 py-0.5 text-xs font-semibold">Reconnecting…</span>}
+          <button type="button" className="rounded-lg px-2 py-1 text-lg text-chalk-dim hover:bg-pitch-700" aria-label={settings.sound.muted ? 'Turn sound on' : 'Turn sound off'}
+            onClick={() => { unlock(); setSettings({ sound: { muted: !settings.sound.muted } }); applyVolumes(); }}>{settings.sound.muted ? '🔇' : '🔊'}</button>
+          <button type="button" className="rounded-lg px-2 py-1 text-lg text-chalk-dim hover:bg-pitch-700" aria-label="Presentation settings" onClick={() => setSheet(true)}>⚙</button>
         </div>
         <ScoreBug state={state} online={online.length} />
         {state.tournament && (
@@ -165,7 +180,9 @@ function Live({ id, me }) {
         ))}
       </nav>
 
-      <FxOverlay fx={fx} />
+      {animationsOn(settings) && <FxOverlay fx={fx} />}
+      <Moments state={state} after={() => revealEnd.current} />
+      <SettingsSheet open={sheet} onClose={() => setSheet(false)} />
       <Cheers items={cheers} />
     </div>
   );
@@ -203,6 +220,7 @@ function PlayTab({ state, priv, me, isUmp, online, openLineups }) {
   return (
     <>
       {test && state.test && <TestDashboard state={state} priv={priv} me={me} />}
+      <StadiumBand teams={{ A: state.teamMeta?.A, B: state.teamMeta?.B }} names={{ A: state.teams.A.name, B: state.teams.B.name }} />
       <section className="panel mown p-4">
         <div className="mb-3 flex items-baseline justify-between">
           <h2 className="font-display text-xl font-bold">{cur?.over ? `Over ${cur.over.number}${cur.over.finished ? ', finished' : ''}` : 'This over'}</h2>

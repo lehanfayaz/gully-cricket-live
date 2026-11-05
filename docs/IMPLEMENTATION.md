@@ -10,6 +10,8 @@ A reference for anyone changing the game. It describes the code as it is, where 
 | Rules engine | `server/engine.js` | Every match action: creation, lineups, toss, submissions, reveal, innings, sessions, suspension, results, chat. Clients only send intents. |
 | Digit rules | `server/rules.js` | Which numbers each role may pick per format, and the bowler repetition rule. Mirrored in `client/src/rules.js` only to grey out buttons. |
 | AI player | `server/ai.js` | Reads public state and revealed balls only, then acts through the same engine functions as a person |
+| Career | `server/career.js` | Achievements and challenges as data-driven rules, levels, milestones |
+| Commentary | `server/commentary.js` | Ball-by-ball commentary written from the saved deliveries |
 | Tournaments | `server/tournament.js` | Fixtures, standings, net run rate, qualification, bracket, AI v AI play, tournament stats |
 | Statistics and analysis | `server/analytics.js` | Careers, match analysis, ball-by-ball replay and highlights, all derived from the saved deliveries |
 | AI decisions | `server/aibrain.js` | Pure decision functions (no database or engine access): opponent models, difficulty, personality, situation, captaincy |
@@ -41,6 +43,59 @@ Every engine action runs inside one SQLite transaction (`tx` in `db.js`, `BEGIN 
 | Test dot-over rule | `reveal`: after the 6th legal ball of an over, `isDotOver` creates a `dot_rules` row for the next over; balls 1–2 of that over meet, cancel (wicket) or break it. `endTestInnings` cancels open ones. No umpire: out (`dismissal = 'dot_rule'`, not credited to the bowler). Umpire: play held until a ruling. |
 | Sessions | `capFor` keeps a submission within the session; `sessionCheck` ends it after its overs; `endSession` records a summary and pauses (or rolls on if that break is switched off). Innings are independent of sessions. |
 | Suspend / resume | `testAction` `suspend` saves `status_before` in `suspensions`; `resume` restores exactly that status. Nothing advances automatically. Open submissions and requirements stay in the database. |
+
+## Career: profile, levels, achievements and challenges
+
+**Profile.**
+- Picture: resized on the device to a 256px JPEG and stored in `users.avatar`. It's served by `GET /api/users/:id/avatar`; for real squad players, that endpoint uses the photo from the cricket database.
+- Favourite international team and IPL franchise.
+- Career figures, all from `analytics.career`.
+- Tournament wins.
+
+**Achievements and challenges are data.** Each is a rule in the `achievements` / `challenges` tables, checked by a generic evaluator (`career.evaluate`) against per-match facts computed from completed matches (`career.matchFacts`), or against tournaments won.
+
+Rule types:
+- `max`: the best value in one match.
+- `sum`: a total across matches.
+- `count`: matches meeting the conditions.
+- `streak`: consecutive matches meeting them.
+- `tournaments`: tournaments won.
+
+Fields: runs, balls, fours, sixes, bestKnock, wicketsTaken, bestSpell, conceded, wicketsLost.
+
+Conditions: won, format, overs, maxOvers, vsAI, aiLevel, maxWicketsLost, hatTrick, teamCategory, tournament (and, for tournaments, allIpl and kind).
+
+Admins add, edit and switch them off on the admin page, with no code changes. A new rule applies to past matches straight away. An unlock is stored once, dated when the qualifying match or tournament ended, linked to it, and never taken away.
+
+**Challenges.** Daily and weekly challenges count only matches in the current period (UTC days, and weeks from Monday). Up to three of each are shown, rotating with the date. Long-term challenges count all matches.
+
+**Levels: Rookie, Amateur, Professional, Elite, Legend.** Each level needs both experience and a number of achievements, so starting matches alone never levels you up. Experience comes from:
+- Runs, and 15 per wicket.
+- Wins, worth more against harder AI.
+- Achievement and challenge XP.
+
+## Broadcast presentation
+
+All of this is client-side and cosmetic. Settings are stored on the device (`client/src/settings.js`), and nothing in them reaches the server or changes play.
+
+- **Stadiums:**
+  - Day, night, international (both teams' colours), IPL-style and custom colours.
+  - Shown as a backdrop and as a wide shot above the play panel.
+- **Animations:**
+  - The coin toss.
+  - A stamp when you lock in.
+  - Ball-by-ball reveal flips.
+  - Wicket, four (ball to the rope) and six (ball into the stands).
+  - The innings-break card, confetti for the winner, and the tournament trophy.
+
+  They trigger from state that has already updated, never hold anything up, and are off when the device asks for reduced motion or the setting is off.
+- **Team presentation:** logos, colours, names, player names, and pictures for the batter and bowler on the scoreboard (uploaded picture, squad photo, or initials).
+- **Sound (`client/src/sound.js`):** synthesised in the browser: ambience, crowd, wicket, boundary, six and win. There are separate volumes for stadium, crowd and effects, under a master volume and mute. It's off until the player turns it on.
+- **Commentary (`server/commentary.js`):**
+  - Written on the server from the same ball records as the scorecard, so its numbers always match.
+  - Covers the score, a batter's total when out, the runs and balls needed, milestones, crucial wickets, Test day and session starts, and the six-ball dot over and the two-ball scoring requirement.
+  - Wording varies, but stays fixed for each ball.
+  - Players can turn it off; the plain ball-by-ball line is then shown instead.
 
 ## Tournaments against the AI
 
@@ -135,6 +190,8 @@ Each AI action is logged in `ai_decisions`. If the AI ever needed its fallback, 
 | `test/testmatch.test.js` | Test digits, sessions, suspend/resume, day changes, dot-over rule (no-umpire and umpire rulings), declarations, follow-on, innings win, draw |
 | `test/rules.test.js` | Every rule example from the specification, in both formats and both play styles, through the real engine, including repetition tracking across a mid-over session break and suspension |
 | `test/ai.test.js` | AI rule compliance (fuzzed), AI never seeing hidden picks, one-v-one and real-team matches, data sync, Quick Match |
+| `test/career.test.js` | Achievements and challenges earned in real matches and a tournament, dated and linked to the match; admin rules applying without code changes; levels; profile picture and favourite teams |
+| `test/broadcast.test.js` | Every commentary line checked against the scorecard and replay (Test dot-over rule, umpire adjustments and voided overs, AI v AI in each format) |
 | `test/tournament.test.js` | Complete tournaments of every kind from first fixture to champion with no manual edits; tables recomputed independently; byes; repeated super overs; fairness; resuming in a new process |
 | `test/analytics.test.js` | Replay rebuilt into every scorecard (19 matches incl. Tests, real teams, voided overs and umpire adjustments); every career figure recounted directly from the balls table |
 | `test/aigrid.test.js` | Every difficulty × personality played as complete matches (Test, T20, ODI, Quick × complete over and ball by ball, 128 matches) and audited ball by ball; fairness; strength and personality differences; 8,000 fuzzed decisions |

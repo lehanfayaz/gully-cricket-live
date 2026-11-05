@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { emit } from '../api.js';
 import { useApp } from '../App.jsx';
 import { digitsFor, repeatLimit, wouldBreak } from '../rules.js';
+import { animationsOn, useSettings } from '../settings.js';
+import { sfx } from '../sound.js';
 
 export const NUM_COLORS = {
   0: 'bg-chalk-dim text-pitch-900',
@@ -70,7 +72,7 @@ export function SubmitOver({ state, role, cur, priv }) {
       <section className="panel p-4" aria-live="polite">
         <div className="flex items-center justify-between">
           <h2 className="font-display text-2xl font-bold">You're locked in</h2>
-          <span className="rounded-full bg-turf px-3 py-1 text-sm font-bold text-pitch-900">🔒 Submitted</span>
+          <LockedChip />
         </div>
         <p className="mb-3 mt-1 text-sm text-chalk-dim">Only you can see {single ? 'this' : 'these'}. {single ? 'It' : 'They'} can't be changed.</p>
         <Slots seq={priv.myLocked} count={priv.myLocked.length} small />
@@ -87,7 +89,7 @@ export function SubmitOver({ state, role, cur, priv }) {
     const r = await emit('over:submit', { matchId: state.id, sequence: digits });
     setBusy(false);
     if (!r.ok) { toast({ title: 'Not submitted', body: r.error }); setConfirm(false); }
-    else setSeq([]);
+    else { setSeq([]); sfx.lock(); }
   };
   const add = (n) => { if (seq.length < need && !blocked(n, seq)) { setSeq([...seq, n]); setConfirm(false); } };
   const random = () => {
@@ -183,4 +185,10 @@ export function OverStatus({ cur, me, single }) {
       <p className="text-sm text-chalk-dim">{next || 'Both picks stay hidden until both are locked in.'}</p>
     </section>
   );
+}
+
+// The "submitted" stamp lands when you lock in.
+function LockedChip() {
+  const s = useSettings();
+  return <span className={`rounded-full bg-turf px-3 py-1 text-sm font-bold text-pitch-900 ${animationsOn(s) ? 'lock-stamp' : ''}`}>🔒 Submitted</span>;
 }

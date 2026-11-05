@@ -9,11 +9,13 @@ import * as G from './engine.js';
 import { profile, leaderboard } from './stats.js';
 import { career, matchAnalysis, replay, highlights } from './analytics.js';
 import * as TOUR from './tournament.js';
+import * as CAREER from './career.js';
 import * as CDB from './cricketdb.js';
 import * as SYNC from './sync.js';
 import { aiStep } from './ai.js';
 
 CDB.seedIfEmpty();
+CAREER.seedDefaults();
 
 const app = express();
 app.use(express.json({ limit: '32kb' }));
@@ -94,11 +96,41 @@ app.post('/api/auth/logout', needUser, wrap((req) => { run('DELETE FROM sessions
 app.get('/api/me', wrap((req) => ({ user: req.user ? { ...publicUser(req.user), admin: isAdmin(req.user) } : null })));
 
 app.patch('/api/me', needUser, wrap((req) => {
-  const name = cleanName(req.body.name);
-  if (name.length < 2) throw new G.GameError('Enter a name with at least 2 characters.');
-  run('UPDATE users SET display_name = ? WHERE id = ?', name, req.user.id);
+  const b = req.body || {};
+  let name = req.user.name;
+  if ('name' in b) {
+    name = cleanName(b.name);
+    if (name.length < 2) throw new G.GameError('Enter a name with at least 2 characters.');
+    run('UPDATE users SET display_name = ? WHERE id = ?', name, req.user.id);
+  }
+  // Favourite teams, from the synced team database.
+  for (const [key, col, cat] of [['favIntl', 'fav_intl', 'international'], ['favIpl', 'fav_ipl', 'ipl']]) {
+    if (!(key in b)) continue;
+    if (b[key] && !get('SELECT 1 FROM cricket_teams WHERE id = ? AND category = ?', String(b[key]), cat)) throw new G.GameError('Pick a team from the list.');
+    run(`UPDATE users SET ${col} = ? WHERE id = ?`, b[key] ? String(b[key]) : null, req.user.id);
+  }
   return { user: publicUser({ ...req.user, name }) };
 }));
+// Profile picture: a small image resized on the device (JPEG, PNG or WebP, up to about 200 KB).
+app.put('/api/me/avatar', needUser, wrap((req) => {
+  const d = String(req.body?.dataUrl || '');
+  if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(d)) throw new G.GameError('Use a JPEG, PNG or WebP picture.');
+  if (d.length > 280000) throw new G.GameError('That picture is too large. Try a smaller one.');
+  run('UPDATE users SET avatar = ? WHERE id = ?', d, req.user.id);
+  return { ok: true };
+}));
+app.delete('/api/me/avatar', needUser, wrap((req) => { run('UPDATE users SET avatar = NULL WHERE id = ?', req.user.id); return { ok: true }; }));
+// Anyone's picture: their uploaded one, or for a real squad player the photo from the cricket database.
+app.get('/api/users/:id/avatar', (req, res) => {
+  const u = get('SELECT avatar, player_id, is_ghost FROM users WHERE id = ?', req.params.id);
+  if (u?.avatar) {
+    const [, mime, b64] = u.avatar.match(/^data:([^;]+);base64,(.*)$/) || [];
+    if (mime) { res.set('content-type', mime).set('cache-control', 'private, max-age=300'); return res.send(Buffer.from(b64, 'base64')); }
+  }
+  const img = u?.is_ghost && u.player_id ? get('SELECT image_url FROM cricket_players WHERE id = ?', u.player_id)?.image_url : null;
+  if (img && /^https:\/\//.test(img)) return res.redirect(302, img);
+  res.status(404).end();
+});
 
 // ---------- matches ----------
 // Team identity for lists: real teams carry their badge; custom teams get a plain one.
@@ -165,6 +197,15 @@ app.post('/api/tournaments/:id/simulate', needUser, wrap((req) => {
   return { job: { running: job.running, played: job.played, current: job.current, error: job.error } };
 }));
 app.post('/api/tournaments/:id/abandon', needUser, wrap((req) => { TOUR.abandon(req.user.id, req.params.id.toUpperCase()); return { ok: true }; }));
+// Career: level, achievements, challenges and milestones (recording any new unlocks).
+app.get('/api/users/:id/achievements', wrap((req) => {
+  if (!get('SELECT 1 FROM users WHERE id = ?', req.params.id)) throw new G.GameError('Player not found.');
+  const { fresh, ...p } = CAREER.progress(req.params.id);
+  return p;
+}));
+app.get('/api/admin/achievements', needAdmin, wrap(() => CAREER.listAll()));
+app.post('/api/admin/achievements', needAdmin, wrap((req) => { try { return { id: CAREER.saveAchievement(req.body || {}) }; } catch (e) { throw new G.GameError(e.message); } }));
+app.post('/api/admin/challenges', needAdmin, wrap((req) => { try { return { id: CAREER.saveChallenge(req.body || {}) }; } catch (e) { throw new G.GameError(e.message); } }));
 app.get('/api/leaderboard', wrap((req) => ({ sort: req.query.sort || 'points', rows: leaderboard(String(req.query.sort || 'points')) })));
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
@@ -215,8 +256,26 @@ function scheduleAI(matchId) {
   }, process.env.AI_DELAY_MS ? Number(process.env.AI_DELAY_MS) : 700 + Math.random() * 700));
 }
 
+// When a match finishes, check each person who played for new achievements and completed challenges.
+const careerChecked = new Set();
+function checkCareers(m) {
+  if (careerChecked.has(m.id)) return;
+  careerChecked.add(m.id);
+  const people = all(`SELECT DISTINCT u.id FROM members mb JOIN users u ON u.id = mb.user_id
+    WHERE mb.match_id = ? AND mb.team IS NOT NULL AND u.is_bot = 0 AND u.is_ghost = 0`, m.id);
+  for (const p of people) announceUnlocks(p.id, m.id);
+}
+function announceUnlocks(userId, matchId) {
+  try {
+    for (const f of CAREER.progress(userId).fresh)
+      io.to(`u:${userId}`).emit('notify', { matchId, kind: 'achievement', title: f.challenge ? `Challenge complete: ${f.title}` : `Achievement unlocked: ${f.title}`, body: f.challenge ? 'Experience added to your career.' : `${f.icon} See it on your profile.` });
+  } catch (e) { console.error('career check failed', e); }
+}
+TOUR.onFinish((ownerId) => announceUnlocks(ownerId, null));
+
 async function broadcast(matchId, sinceMsgId, ctx) {
   const m = G.loadMatch(matchId);
+  if (m.status === 'completed') checkCareers(m);
   io.to(roomOf(matchId)).emit('state', G.publicState(matchId));
   if (m.config.participation === 'ai') scheduleAI(matchId);
   const sockets = await io.in(roomOf(matchId)).fetchSockets();

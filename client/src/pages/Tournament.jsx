@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useApp } from '../App.jsx';
 import TeamBadge from '../components/TeamBadge.jsx';
+import { TrophyShow } from '../components/Broadcast.jsx';
 
 const KIND = { groups: 'Groups and knockout', league: 'Round robin', knockout: 'Knockout', custom: 'Custom tournament' };
 const TABS = [['overview', 'Overview'], ['fixtures', 'Fixtures'], ['table', 'Table'], ['bracket', 'Bracket'], ['teams', 'Teams'], ['stats', 'Stats']];
@@ -53,6 +54,7 @@ export default function Tournament() {
       </div>
       <p className="-mt-2 text-sm text-chalk-dim">{t.progress.played} of {t.progress.total} matches played{t.status === 'abandoned' ? '. This tournament was abandoned.' : ''}</p>
 
+      <TrophyShow tournament={t} />
       <NextAction t={t} byKey={byKey} busy={busy} play={play} simulate={simulate} />
 
       <nav className="no-scrollbar flex gap-1 overflow-x-auto pb-1" aria-label="Tournament sections">

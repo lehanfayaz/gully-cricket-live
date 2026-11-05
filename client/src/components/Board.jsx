@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import TeamBadge from './TeamBadge.jsx';
+import Avatar from './Avatar.jsx';
+import { useSettings } from '../settings.js';
 import { teamIdentity } from './Panels.jsx';
 
 export function ScoreBug({ state, online }) {
@@ -44,8 +46,8 @@ export function ScoreBug({ state, online }) {
       <div className="flex items-center gap-3 bg-pitch-700/90 px-4 py-1.5 text-sm">
         {cur && state.status === 'live' ? (
           <>
-            <span className="truncate"><span className="text-turf">🏏</span> <b>{cur.strikerName}</b> {bat ? `${bat.runs} (${bat.balls})` : '0 (0)'}</span>
-            <span className="truncate text-chalk-dim">bowling: <b className="text-chalk">{cur.bowlerName}</b> {bowl ? `${bowl.wickets}-${bowl.runs}` : ''}</span>
+            <span className="flex min-w-0 items-center gap-1.5 truncate"><Avatar id={cur.strikerId} name={cur.strikerName} size={22} /><b className="truncate">{cur.strikerName}</b> {bat ? `${bat.runs} (${bat.balls})` : '0 (0)'}</span>
+            <span className="flex min-w-0 items-center gap-1.5 truncate text-chalk-dim"><Avatar id={cur.bowlerId} name={cur.bowlerName} size={22} /><b className="truncate text-chalk">{cur.bowlerName}</b> {bowl ? `${bowl.wickets}-${bowl.runs}` : ''}</span>
           </>
         ) : <span className="text-chalk-dim">Run rate {cur?.runRate}</span>}
         <span className="ml-auto"><Online n={online} /></span>
@@ -112,6 +114,7 @@ export function OverStrip({ over, compact }) {
 }
 
 export function Commentary({ items, limit = 12 }) {
+  const settings = useSettings();
   const list = items.filter((c) => !c.voided).slice(0, limit);
   if (!list.length) return <p className="text-chalk-dim">Ball-by-ball commentary appears here once play starts.</p>;
   return (
@@ -121,7 +124,7 @@ export function Commentary({ items, limit = 12 }) {
           <span className="w-10 shrink-0 font-display text-base font-bold tabular-nums text-chalk-dim">{c.over}</span>
           <span className={`grid h-7 w-7 shrink-0 place-items-center rounded-full font-display font-bold ${c.wicket ? 'bg-leather' : c.runs === 6 ? 'bg-flood text-pitch-900' : c.runs === 4 ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{c.wicket ? 'W' : c.runs}</span>
           <span className="pt-1">
-            {c.wicket ? <><b>{c.batter}</b> is out. {c.bowler} had {c.bowl} too.</> : <><b>{c.batter}</b> picks {c.bat}, {c.bowler} had {c.bowl}.</>}
+            {settings.commentary && c.text ? c.text : c.wicket ? <><b>{c.batter}</b> is out. {c.bowler} had {c.bowl} too.</> : <><b>{c.batter}</b> picks {c.bat}, {c.bowler} had {c.bowl}.</>}
           </span>
         </li>
       ))}

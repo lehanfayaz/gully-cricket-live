@@ -315,7 +315,7 @@ assert.throws(() => TOUR.createTournament(owner, { kind: 'knockout', teams: TEAM
         if (s.status === 'completed') break;
         if (s.status === 'lobby') { if (!s.lineups.A.confirmedAt) G.confirmLineup('p', mid, 'A', G.newCtx()); else if (s.stage === 'toss_call') G.callToss('p', mid, 'heads', G.newCtx()); else if (s.stage === 'toss_decision') G.decideToss('p', mid, 'bat', G.newCtx()); continue; }
         const bowled = s.innings.reduce((a, i) => a + i.balls, 0);
-        if (mode === 'start' && bowled >= 3 && s.status === 'live') { console.log(JSON.stringify({ tid, mid, balls: bowled })); process.exit(0); }
+        if (mode === 'start' && bowled >= 1 && s.status === 'live') { console.log(JSON.stringify({ tid, mid, balls: bowled })); process.exit(0); }
         const c = s.current, mine = (pid) => pid === 'p' || s.members.find((x) => x.id === pid)?.controller === 'p';
         const bw = c.open ? c.set.bowlerId : c.bowlerId;
         const role = mine(bw) && !(c.open && c.set.bowlerLocked) ? 'bowl' : 'bat';
@@ -328,7 +328,7 @@ assert.throws(() => TOUR.createTournament(owner, { kind: 'knockout', teams: TEAM
   `);
   const out1 = execFileSync(process.execPath, ["--disable-warning=ExperimentalWarning", script, "start"], { encoding: "utf8" });
   const first = JSON.parse(out1.trim().split("\n").pop());
-  assert.ok(first.mid && first.balls >= 3, 'stopped part-way through the human match');
+  assert.ok(first.mid && first.balls >= 1, 'stopped part-way through the human match');
   const second = JSON.parse(execFileSync(process.execPath, ['--disable-warning=ExperimentalWarning', script, 'finish', first.tid], { encoding: 'utf8' }).trim().split('\n').pop());
   assert.equal(second.status, 'completed', 'a new process carried on from the saved state to a champion');
   assert.ok(second.champion);

@@ -329,6 +329,8 @@ export function playNext(userId, tid) {
 
 // Play out AI v AI fixtures, ball by ball through the engine, up to the human's next match (or the end).
 const jobs = new Map();
+let finishHook = () => {};
+export const onFinish = (fn) => { finishHook = fn; };
 export function jobOf(tid) { return jobs.get(tid) || null; }
 export function simulate(userId, tid, { limit = Infinity } = {}) {
   const T = ownTournament(userId, tid);
@@ -350,6 +352,7 @@ export function simulate(userId, tid, { limit = Infinity } = {}) {
       sync(tid);
     } catch (e) { job.error = e.message; console.error('Tournament simulation error', e); }
     job.running = false; job.current = null;
+    try { finishHook(T.owner_id); } catch {}
   })();
   return job;
 }

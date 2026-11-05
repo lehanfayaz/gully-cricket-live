@@ -16,6 +16,8 @@ export function FxOverlay({ fx }) {
           ))}
         </div>
       )}
+      {fx.type === 'six' && <span className="six-ball absolute h-6 w-6 rounded-full bg-leather shadow-[0_0_20px_rgba(224,57,62,.8)] ring-2 ring-chalk/70" />}
+      {fx.type === 'four' && <span className="four-ball absolute bottom-[26%] h-5 w-5 rounded-full bg-leather ring-2 ring-chalk/70" />}
       <div className={`fx-word font-display text-[34vw] font-extrabold leading-none drop-shadow-[0_8px_0_rgba(0,0,0,0.45)] sm:text-[200px] ${color}`}>{word}</div>
       {fx.batter && fx.type !== 'result' && (
         <div className="fx-word absolute bottom-[30%] font-display text-2xl font-bold text-chalk">{fx.type === 'wicket' ? `${fx.batter} has to go` : fx.batter}</div>

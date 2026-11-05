@@ -46,10 +46,12 @@ export function recordStats(userId) {
 }
 
 export function profile(userId) {
-  const u = get('SELECT id, username, display_name AS name, is_guest AS guest, created_at FROM users WHERE id = ?', userId);
+  const u = get('SELECT id, username, display_name AS name, is_guest AS guest, created_at, fav_intl, fav_ipl, avatar IS NOT NULL AS has_avatar FROM users WHERE id = ?', userId);
   if (!u) return null;
   const rec = recordStats(userId);
-  return { user: { ...u, guest: !!u.guest }, batting: battingStats(userId), bowling: bowlingStats(userId),
+  const team = (id) => (id ? get('SELECT id, name, short, color, logo_url AS logo, country, category FROM cricket_teams WHERE id = ?', id) || null : null);
+  const { fav_intl: fi, fav_ipl: fp, has_avatar: ha, ...base } = u;
+  return { user: { ...base, guest: !!u.guest, hasAvatar: !!ha, favIntl: team(fi), favIpl: team(fp) }, batting: battingStats(userId), bowling: bowlingStats(userId),
     record: { matches: rec.matches, wins: rec.wins, losses: rec.losses, ties: rec.ties, draws: rec.draws }, history: rec.history.slice(0, 30) };
 }
 

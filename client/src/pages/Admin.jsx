@@ -27,7 +27,7 @@ export default function Admin() {
   };
   return (
     <div className="space-y-4 px-4 pb-12 pt-2">
-      <h1 className="font-display text-5xl font-extrabold leading-none">Cricket data</h1>
+      <h1 className="font-display text-5xl font-extrabold leading-none">Admin</h1>
       <section className="panel space-y-2 p-4">
         <h2 className="font-display text-2xl font-bold">Sync</h2>
         {!sync ? <p className="text-chalk-dim">Loading…</p> : (
@@ -52,6 +52,7 @@ export default function Admin() {
           </>
         )}
       </section>
+      <CareerRules />
       <section className="panel p-4">
         <div className="flex items-baseline justify-between">
           <h2 className="font-display text-2xl font-bold">Teams</h2>
@@ -139,5 +140,98 @@ function TeamEditor({ id, onDone }) {
         <button className="btn-ghost py-2">Add</button>
       </form>
     </div>
+  );
+}
+
+// Achievements and challenges are rules stored as data: add or change them here, no code changes needed.
+function CareerRules() {
+  const { toast } = useApp();
+  const [d, setD] = useState(null);
+  const [edit, setEdit] = useState(null); // { kind: 'achievement'|'challenge', item }
+  const load = () => api('/api/admin/achievements').then(setD).catch(() => {});
+  useEffect(() => { load(); }, []);
+  if (!d) return null;
+  const row = (kind, x) => (
+    <li key={x.id} className="flex items-center gap-2 py-2">
+      <span className="w-8 text-center text-xl" aria-hidden>{kind === 'achievement' ? x.icon : ''}</span>
+      <span className="min-w-0 flex-1"><span className={`block font-semibold ${x.active ? '' : 'text-chalk-faint line-through'}`}>{x.title}{kind === 'challenge' ? <span className="ml-1 text-xs font-normal text-chalk-faint">{x.period}</span> : null}</span>
+        <span className="block truncate text-xs text-chalk-faint">{describeRule(x.rule)}. {x.xp} XP. {kind === 'achievement' ? `${x.unlocks} unlocked` : `${x.completions} completions`}.</span></span>
+      <button type="button" className="btn-ghost px-3 py-1 text-sm" onClick={() => setEdit({ kind, item: x })}>Edit</button>
+    </li>
+  );
+  return (
+    <section className="panel space-y-3 p-4">
+      <h2 className="font-display text-2xl font-bold">Achievements and challenges</h2>
+      <p className="text-sm text-chalk-dim">Each one is a rule checked against players' completed matches. New and changed rules apply to past matches straight away. Switching one off hides it, but never takes it away from players who earned it.</p>
+      {edit ? <RuleForm d={d} edit={edit} onDone={(saved) => { setEdit(null); if (saved) { toast({ title: 'Saved', ms: 2000 }); load(); } }} /> : (
+        <div className="flex gap-2">
+          <button type="button" className="btn-go" onClick={() => setEdit({ kind: 'achievement', item: null })}>New achievement</button>
+          <button type="button" className="btn-ghost" onClick={() => setEdit({ kind: 'challenge', item: null })}>New challenge</button>
+        </div>
+      )}
+      <h3 className="font-display text-xl font-bold">Achievements</h3>
+      <ul className="divide-y divide-pitch-600">{d.achievements.map((x) => row('achievement', x))}</ul>
+      <h3 className="font-display text-xl font-bold">Challenges</h3>
+      <ul className="divide-y divide-pitch-600">{d.challenges.map((x) => row('challenge', x))}</ul>
+    </section>
+  );
+}
+const WHERE_LABEL = { won: 'won', format: 'format', overs: 'overs =', maxOvers: 'overs ≤', vsAI: 'v the AI', aiLevel: 'AI level', maxWicketsLost: 'wickets lost ≤', hatTrick: 'hat-trick', teamCategory: 'team from', tournament: 'tournament match', allIpl: 'all IPL teams', kind: 'tournament format' };
+function describeRule(r) {
+  if (!r) return 'No rule';
+  const w = Object.entries(r.where || {}).map(([k, v]) => `${WHERE_LABEL[k] || k} ${Array.isArray(v) ? v.join('/') : v}`).join(', ');
+  const what = r.type === 'max' ? `best ${r.field} in a match ≥ ${r.target}` : r.type === 'sum' ? `total ${r.field} ≥ ${r.target}` : r.type === 'count' ? `${r.target} matches` : r.type === 'streak' ? `${r.target} in a row` : `${r.target} tournament win${r.target === 1 ? '' : 's'}`;
+  return `${what}${w ? ` where ${w}` : ''}`;
+}
+const BOOL = ['won', 'vsAI', 'hatTrick', 'tournament', 'allIpl'];
+const NUM = ['overs', 'maxOvers', 'maxWicketsLost'];
+function RuleForm({ d, edit, onDone }) {
+  const { toast } = useApp();
+  const it = edit.item;
+  const [f, setF] = useState({ id: it?.id || '', title: it?.title || '', description: it?.description || '', icon: it?.icon || '🏅', xp: it?.xp ?? 50, period: it?.period || 'daily', active: it?.active ?? true,
+    type: it?.rule?.type || 'count', field: it?.rule?.field || 'runs', target: it?.rule?.target ?? 1,
+    where: Object.entries(it?.rule?.where || {}).map(([k, v]) => ({ k, v: Array.isArray(v) ? v.join(', ') : String(v) })) });
+  const set = (k) => (e) => setF({ ...f, [k]: e?.target ? (e.target.type === 'checkbox' ? e.target.checked : e.target.value) : e });
+  const conds = f.type === 'tournaments' ? d.schema.tournamentConditions : d.schema.conditions;
+  const value = (k, v) => (BOOL.includes(k) ? v.trim() !== 'false' : NUM.includes(k) ? Number(v) : v.split(',').map((x) => x.trim()).filter(Boolean));
+  const save = async (e) => {
+    e.preventDefault();
+    const rule = { type: f.type, target: Number(f.target), ...(f.type === 'max' || f.type === 'sum' ? { field: f.field } : {}), where: Object.fromEntries(f.where.filter((w) => w.k).map((w) => [w.k, value(w.k, w.v)])) };
+    try { await api(edit.kind === 'achievement' ? '/api/admin/achievements' : '/api/admin/challenges', { body: { id: f.id, title: f.title, description: f.description, icon: f.icon, xp: Number(f.xp), period: f.period, active: f.active, rule } }); onDone(true); }
+    catch (x) { toast({ title: 'Not saved', body: x.message }); }
+  };
+  return (
+    <form onSubmit={save} className="space-y-3 rounded-xl bg-pitch-900/60 p-3">
+      <div className="grid gap-2 sm:grid-cols-[1fr_2fr_5rem]">
+        <div><label className="label" htmlFor="rid">Id</label><input id="rid" className="field" value={f.id} onChange={set('id')} disabled={!!it} placeholder="e.g. fast-fifty" /></div>
+        <div><label className="label" htmlFor="rt">Title</label><input id="rt" className="field" value={f.title} onChange={set('title')} maxLength={40} /></div>
+        {edit.kind === 'achievement' && <div><label className="label" htmlFor="ri">Icon</label><input id="ri" className="field" value={f.icon} onChange={set('icon')} maxLength={8} /></div>}
+      </div>
+      <div><label className="label" htmlFor="rd">Description</label><input id="rd" className="field" value={f.description} onChange={set('description')} maxLength={140} /></div>
+      <div className="grid gap-2 sm:grid-cols-4">
+        {edit.kind === 'challenge' && <div><label className="label" htmlFor="rp">Period</label><select id="rp" className="field" value={f.period} onChange={set('period')}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="longterm">Long term</option></select></div>}
+        <div><label className="label" htmlFor="rty">Rule</label><select id="rty" className="field" value={f.type} onChange={set('type')}>{Object.keys(d.schema.types).map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
+        {(f.type === 'max' || f.type === 'sum') && <div><label className="label" htmlFor="rf">Field</label><select id="rf" className="field" value={f.field} onChange={set('field')}>{Object.keys(d.schema.fields).map((k) => <option key={k} value={k}>{k}</option>)}</select></div>}
+        <div><label className="label" htmlFor="rtg">Target</label><input id="rtg" type="number" min="1" className="field" value={f.target} onChange={set('target')} /></div>
+        <div><label className="label" htmlFor="rx">XP</label><input id="rx" type="number" min="0" className="field" value={f.xp} onChange={set('xp')} /></div>
+      </div>
+      <p className="text-xs text-chalk-faint">{d.schema.types[f.type]}{(f.type === 'max' || f.type === 'sum') ? `: ${d.schema.fields[f.field]}` : ''}.</p>
+      <div>
+        <span className="label">Only matches where</span>
+        {f.where.map((w, i) => (
+          <div key={i} className="mb-1 flex gap-2">
+            <select aria-label="Condition" className="field" value={w.k} onChange={(e) => setF({ ...f, where: f.where.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)) })}>
+              <option value="">Pick a condition</option>{Object.keys(conds).map((k) => <option key={k} value={k}>{k}</option>)}
+            </select>
+            <input aria-label="Value" className="field" value={w.v} placeholder={BOOL.includes(w.k) ? 'true or false' : NUM.includes(w.k) ? 'a number' : 'values, comma-separated'} onChange={(e) => setF({ ...f, where: f.where.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)) })} />
+            <button type="button" className="btn-ghost px-3" aria-label="Remove condition" onClick={() => setF({ ...f, where: f.where.filter((_, j) => j !== i) })}>✕</button>
+          </div>
+        ))}
+        <button type="button" className="text-sm text-chalk-dim underline" onClick={() => setF({ ...f, where: [...f.where, { k: '', v: '' }] })}>Add a condition</button>
+        {f.where.filter((w) => w.k).map((w) => <p key={w.k} className="text-xs text-chalk-faint">{w.k}: {conds[w.k]}</p>)}
+      </div>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.active} onChange={set('active')} /> Active</label>
+      <div className="flex gap-2"><button className="btn-go">Save</button><button type="button" className="btn-ghost" onClick={() => onDone(false)}>Cancel</button></div>
+    </form>
   );
 }

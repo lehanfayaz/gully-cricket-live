@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { get, all, run, tx } from './db.js';
 import { checkDigits, isDotOver, isTest } from './rules.js';
 import { selectXI } from './aibrain.js';
+import { commentary as writeCommentary } from './commentary.js';
 import { getTeam } from './cricketdb.js';
 
 export class GameError extends Error {}
@@ -1308,7 +1309,7 @@ export function umpireAction(userId, matchId, a, ctx) {
         if (!delta || Math.abs(delta) > 50) fail('Enter a run adjustment between -50 and 50.');
         const reason = String(a.reason || '').slice(0, 140) || 'Umpire adjustment';
         run('UPDATE innings SET extras = extras + ? WHERE id = ?', delta, inn.id);
-        record(matchId, userId, 'adjust_runs', `Umpire adjustment: ${delta > 0 ? '+' : ''}${delta} to ${teamName(m, inn.batting)} (${reason}).`, { delta, reason });
+        record(matchId, userId, 'adjust_runs', `Umpire adjustment: ${delta > 0 ? '+' : ''}${delta} to ${teamName(m, inn.batting)} (${reason}).`, { delta, reason, inningsId: inn.id });
         const t = totals(inn.id);
         if (inn.status === 'live' && inn.target && t.runs >= inn.target) {
           run(`UPDATE sets SET status = 'cancelled' WHERE innings_id = ? AND status = 'open'`, inn.id);
@@ -1541,11 +1542,8 @@ export function publicState(matchId) {
       })),
     };
   }
-  const commentary = all(`SELECT b.*, i.number AS inn, bu.display_name AS batter, bo.display_name AS bowler
-      FROM balls b JOIN innings i ON i.id = b.innings_id JOIN users bu ON bu.id = b.batter_id JOIN users bo ON bo.id = b.bowler_id
-      WHERE i.match_id = ? ORDER BY b.id DESC LIMIT 60`, matchId)
-    .map((b) => ({ id: b.id, inn: b.inn, over: ballLabel(b.ball_no), ballNo: b.ball_no, batter: b.batter, bowler: b.bowler,
-      bat: b.bat_num, bowl: b.bowl_num, runs: b.runs, wicket: !!b.is_wicket, voided: !!b.voided }));
+  // Ball-by-ball commentary, written from the saved deliveries (see commentary.js).
+  const commentary = writeCommentary(m, { limit: 60, teamName });
   const history = all('SELECT id, action, text, created_at FROM audit WHERE match_id = ? AND text IS NOT NULL ORDER BY id DESC LIMIT 60', matchId)
     .map((h) => ({ id: h.id, action: h.action, text: h.text, at: h.created_at }));
   // Where the match is in its lifecycle, for the status banner.

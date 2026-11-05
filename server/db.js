@@ -278,6 +278,33 @@ CREATE TABLE IF NOT EXISTS tournament_fixtures (
 CREATE INDEX IF NOT EXISTS idx_tfix ON tournament_fixtures (tournament_id, order_no);
 `);
 
+// Player profiles and career progression. Achievements and challenges are rules stored as data.
+addColumn('users', 'avatar', 'TEXT');          // small data: URL (resized on the device before upload)
+addColumn('users', 'fav_intl', 'TEXT');        // cricket_teams.id
+addColumn('users', 'fav_ipl', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS achievements (
+  id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, icon TEXT, xp INTEGER NOT NULL DEFAULT 0,
+  rule TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, sort INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS challenges (
+  id TEXT PRIMARY KEY, period TEXT NOT NULL, title TEXT NOT NULL, description TEXT, xp INTEGER NOT NULL DEFAULT 0,
+  rule TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, sort INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS user_achievements (
+  user_id TEXT NOT NULL, achievement_id TEXT NOT NULL,
+  unlocked_at INTEGER NOT NULL,                 -- when the qualifying match or tournament ended
+  ref TEXT, ref_kind TEXT,                      -- that match or tournament
+  recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, achievement_id)
+);
+CREATE TABLE IF NOT EXISTS user_challenges (
+  user_id TEXT NOT NULL, challenge_id TEXT NOT NULL, period_key TEXT NOT NULL,
+  completed_at INTEGER NOT NULL, ref TEXT, recorded_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, challenge_id, period_key)
+);
+`);
+
 export function tx(fn) {
   db.exec('BEGIN IMMEDIATE');
   try { const r = fn(); db.exec('COMMIT'); return r; }

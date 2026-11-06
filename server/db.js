@@ -4,8 +4,28 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const file = process.env.DB_PATH || path.resolve('data/cricket.db');
+export const file = process.env.DB_PATH || path.resolve('data/cricket.db');
 if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
+
+// A restore requested from the admin page is applied here, before the database is opened.
+if (file !== ':memory:') {
+  const pending = path.join(path.dirname(file), 'restore-pending.json');
+  if (fs.existsSync(pending)) {
+    try {
+      const { backup } = JSON.parse(fs.readFileSync(pending, 'utf8'));
+      const check = new DatabaseSync(backup, { readOnly: true });
+      const ok = check.prepare('PRAGMA integrity_check').get()?.integrity_check === 'ok';
+      check.close();
+      if (!ok) throw new Error('the backup failed its integrity check');
+      const keep = path.join(path.dirname(file), `pre-restore-${Date.now()}.db`);
+      if (fs.existsSync(file)) fs.copyFileSync(file, keep);
+      for (const ext of ['-wal', '-shm']) if (fs.existsSync(file + ext)) fs.rmSync(file + ext);
+      fs.copyFileSync(backup, file);
+      console.warn(`Database restored from ${backup}. The previous database was kept as ${keep}.`);
+    } catch (e) { console.error(`Restore not applied: ${e.message}. Starting with the current database.`); }
+    fs.rmSync(pending, { force: true });
+  }
+}
 
 export const db = new DatabaseSync(file);
 db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
@@ -304,6 +324,60 @@ CREATE TABLE IF NOT EXISTS user_challenges (
   PRIMARY KEY (user_id, challenge_id, period_key)
 );
 `);
+
+// ---------- Phase 7: accounts, roles, audit and protection ----------
+addColumn('users', 'role', "TEXT NOT NULL DEFAULT 'player'");      // player | moderator | admin
+addColumn('users', 'status', "TEXT NOT NULL DEFAULT 'active'");    // active | suspended
+addColumn('users', 'suspended_reason', 'TEXT');
+addColumn('users', 'suspended_at', 'INTEGER');
+addColumn('users', 'last_seen_at', 'INTEGER');
+addColumn('sessions', 'last_used_at', 'INTEGER');
+addColumn('matches', 'abandoned_reason', 'TEXT');
+db.exec(`
+CREATE TABLE IF NOT EXISTS admin_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, user_id TEXT, username TEXT,
+  action TEXT NOT NULL, target_type TEXT, target_id TEXT, detail TEXT, ip TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_admin_audit ON admin_audit (at);
+CREATE TABLE IF NOT EXISTS error_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, source TEXT, route TEXT, user_id TEXT, message TEXT, stack TEXT
+);
+CREATE TABLE IF NOT EXISTS admin_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, read_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS integrity_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, trigger TEXT, ok INTEGER NOT NULL, summary TEXT
+);
+-- Recorded deliveries are permanent. The only changes the game itself makes are allowed:
+-- voiding (0 -> 1, never back), and a dot-over-rule dismissal on a ball that scored nothing.
+CREATE TRIGGER IF NOT EXISTS balls_no_edit BEFORE UPDATE OF bat_num, bowl_num, runs, ball_no, innings_id, batter_id, bowler_id, set_id, stint, session_idx ON balls
+BEGIN SELECT RAISE(ABORT, 'Recorded deliveries cannot be changed.'); END;
+CREATE TRIGGER IF NOT EXISTS balls_wicket_rule BEFORE UPDATE OF is_wicket, dismissal ON balls
+WHEN NOT (NEW.is_wicket = 1 AND NEW.dismissal = 'dot_rule' AND OLD.runs = 0) AND (NEW.is_wicket IS NOT OLD.is_wicket OR NEW.dismissal IS NOT OLD.dismissal)
+BEGIN SELECT RAISE(ABORT, 'Recorded deliveries cannot be changed.'); END;
+CREATE TRIGGER IF NOT EXISTS balls_unvoid BEFORE UPDATE OF voided ON balls WHEN NEW.voided < OLD.voided
+BEGIN SELECT RAISE(ABORT, 'A voided delivery stays voided.'); END;
+CREATE TRIGGER IF NOT EXISTS balls_no_delete BEFORE DELETE ON balls
+BEGIN SELECT RAISE(ABORT, 'Recorded deliveries cannot be deleted.'); END;
+-- Locked-in numbers can't be swapped once committed.
+CREATE TRIGGER IF NOT EXISTS sets_seq_fixed BEFORE UPDATE OF seq, salt, hash ON sets
+WHEN OLD.hash IS NOT NULL AND OLD.hash <> '' AND (NEW.seq IS NOT OLD.seq OR NEW.salt IS NOT OLD.salt OR NEW.hash IS NOT OLD.hash)
+BEGIN SELECT RAISE(ABORT, 'Locked-in numbers cannot be changed.'); END;
+CREATE TRIGGER IF NOT EXISTS sets_batseq_fixed BEFORE UPDATE OF bat_seq, bat_salt, bat_hash ON sets
+WHEN OLD.bat_hash IS NOT NULL AND OLD.bat_hash <> '' AND (NEW.bat_seq IS NOT OLD.bat_seq OR NEW.bat_salt IS NOT OLD.bat_salt OR NEW.bat_hash IS NOT OLD.bat_hash)
+BEGIN SELECT RAISE(ABORT, 'Locked-in numbers cannot be changed.'); END;
+CREATE TRIGGER IF NOT EXISTS sets_no_delete BEFORE DELETE ON sets
+BEGIN SELECT RAISE(ABORT, 'Submissions cannot be deleted.'); END;
+CREATE TRIGGER IF NOT EXISTS innings_no_delete BEFORE DELETE ON innings
+BEGIN SELECT RAISE(ABORT, 'Innings cannot be deleted.'); END;
+-- The match event log and the admin audit log are append-only.
+CREATE TRIGGER IF NOT EXISTS audit_append_only BEFORE UPDATE ON audit BEGIN SELECT RAISE(ABORT, 'The match event log is append-only.'); END;
+CREATE TRIGGER IF NOT EXISTS audit_no_delete BEFORE DELETE ON audit BEGIN SELECT RAISE(ABORT, 'The match event log is append-only.'); END;
+CREATE TRIGGER IF NOT EXISTS admin_audit_append_only BEFORE UPDATE ON admin_audit BEGIN SELECT RAISE(ABORT, 'The admin audit log is append-only.'); END;
+CREATE TRIGGER IF NOT EXISTS admin_audit_no_delete BEFORE DELETE ON admin_audit BEGIN SELECT RAISE(ABORT, 'The admin audit log is append-only.'); END;
+`);
+// Keep a database file safe: write-ahead logging, and foreign keys checked.
+try { db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;'); } catch {}
 
 export function tx(fn) {
   db.exec('BEGIN IMMEDIATE');

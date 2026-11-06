@@ -59,7 +59,7 @@ const before = await api('/api/cricket/teams');
 assert.ok(before.teams.some((t) => t.id === 'int-ind' && t.squadSize === 0), 'seeded teams, no invented players');
 const boss = await api('/api/auth/register', { username: 'boss', password: 'password123' });
 const plainUser = await api('/api/auth/register', { username: 'pleb', password: 'password123' });
-await assert.rejects(api('/api/admin/sync', {}, plainUser.token), /Only admins/);
+await assert.rejects(api('/api/admin/sync', {}, plainUser.token), /permission/);
 const r1 = await api('/api/admin/sync', {}, boss.token);
 assert.equal(r1.result.squads, 4);
 assert.equal(r1.result.newPlayers, 60);

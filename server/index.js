@@ -13,12 +13,38 @@ import * as CAREER from './career.js';
 import * as CDB from './cricketdb.js';
 import * as SYNC from './sync.js';
 import { aiStep } from './ai.js';
+import * as SEC from './security.js';
+import * as ADMIN from './admin.js';
+import * as CONFIG from './config.js';
+import * as BACKUP from './backup.js';
+import * as INTEGRITY from './integrity.js';
+import * as IMPORTER from './importer.js';
 
 CDB.seedIfEmpty();
 CAREER.seedDefaults();
+// One-time import of the squads workbook shipped with this release (6 Nov 2026). Recorded so it never runs twice,
+// and an admin's later imports or syncs aren't overwritten by it.
+{
+  const KEY = 'import:squads-2026-11-06';
+  const file = path.join(path.dirname(new URL(import.meta.url).pathname), 'data', 'squads-2026-11-06.xlsx');
+  if (!CDB.getSetting(KEY) && fs.existsSync(file) && process.env.NODE_ENV !== 'test') {
+    IMPORTER.parseWorkbook(fs.readFileSync(file)).then((p) => {
+      const r = IMPORTER.applyImport(p, { label: 'Spreadsheet: Cricket_Squads_Nov2026.xlsx' });
+      CDB.setSetting(KEY, String(Date.now()));
+      console.log(`Imported squads workbook: ${r.squads} squads, ${r.newPlayers} new players.`);
+    }).catch((e) => console.error('Squads workbook import failed:', e));
+  }
+}
 
 const app = express();
-app.use(express.json({ limit: '32kb' }));
+app.set('trust proxy', 1); // Railway sits in front: use the client's address for rate limits and logs
+app.disable('x-powered-by');
+app.use(SEC.headers);
+// Small JSON bodies everywhere, except a profile picture (resized on the device, up to ~300 KB encoded).
+const smallJson = express.json({ limit: '32kb' }), avatarJson = express.json({ limit: '400kb' });
+app.use((req, res, next) => (req.path === '/api/me/avatar' ? avatarJson : smallJson)(req, res, next));
+// A general ceiling per client, and stricter ones for signing in.
+app.use('/api', SEC.rateLimit('api', 600, 60000));
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: process.env.CORS_ORIGIN || false } });
 
@@ -33,9 +59,7 @@ const checkPass = (pw, stored) => {
   const a = Buffer.from(h, 'hex'), b = crypto.scryptSync(pw, salt, 64);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
-const userFromToken = (token) => token
-  ? get('SELECT u.id, u.username, u.display_name AS name, u.is_guest AS guest FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?', token)
-  : null;
+const userFromToken = (token) => SEC.userFromToken(token);
 const publicUser = (u) => u && ({ id: u.id, username: u.username, name: u.name ?? u.display_name, guest: !!(u.guest ?? u.is_guest) });
 const issue = (userId) => { const t = newToken(); run('INSERT INTO sessions (token, user_id, created_at) VALUES (?,?,?)', t, userId, Date.now()); return t; };
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 24);
@@ -44,24 +68,40 @@ function auth(req, res, next) {
   const token = (req.headers.authorization || '').replace(/^Bearer /, '');
   req.user = userFromToken(token);
   req.token = token;
+  if (req.user) req.user.guest = !!req.user.guest;
+  // A suspended account is signed out everywhere and can't act.
+  if (req.user?.status === 'suspended') { req.user = null; return res.status(403).json({ error: 'This account is suspended. Contact the organisers.' }); }
   next();
 }
 const needUser = (req, res, next) => (req.user ? next() : res.status(401).json({ error: 'Sign in first.' }));
-// Admins: registered usernames listed in ADMIN_USERNAMES (comma-separated) on the server.
-const adminNames = () => String(process.env.ADMIN_USERNAMES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-const isAdmin = (u) => !!u && !u.guest && !!u.username && adminNames().includes(u.username.toLowerCase());
-const needAdmin = (req, res, next) => (isAdmin(req.user) ? next() : res.status(403).json({ error: 'Only admins can do that.' }));
+// Roles: owners (ADMIN_USERNAMES on the server) are always admins; admins can make others moderators or admins.
+const isAdmin = (u) => SEC.can(u, 'admin.view');
+const need = SEC.need;
+const needAdmin = need('config.manage');
 app.use('/api', auth);
 
 const wrap = (fn) => (req, res) => {
   try { const out = fn(req, res); if (out !== undefined) res.json(out); }
   catch (e) {
     if (e instanceof G.GameError) res.status(400).json({ error: e.message });
-    else { console.error(e); res.status(500).json({ error: 'Something went wrong on the server.' }); }
+    else { serverError(e, req); res.status(500).json({ error: 'Something went wrong on the server.' }); }
   }
 };
+// Server errors are logged; staff get one notification per half hour so a burst doesn't flood them.
+let lastErrorNote = 0;
+function serverError(e, req) {
+  SEC.logError('api', e, { route: req ? `${req.method} ${req.path}` : null, userId: req?.user?.id });
+  if (Date.now() - lastErrorNote > 30 * 60000) { lastErrorNote = Date.now(); notifyStaff('error', `Server error: ${String(e?.message || e).slice(0, 200)}. See the error log.`); }
+}
+// An admin action: run it, write it to the audit log, return the result.
+const staff = (perm, action, fn) => [need(perm), wrap((req, res) => {
+  const out = fn(req, res);
+  if (out !== undefined && action) SEC.audit(req, action, ...(out?._audit || []));
+  if (out && out._audit) delete out._audit;
+  return out;
+})];
 
-app.post('/api/auth/guest', wrap((req) => {
+app.post('/api/auth/guest', SEC.rateLimit('guest', 20, 3600000), wrap((req) => {
   const name = cleanName(req.body.name);
   if (name.length < 2) throw new G.GameError('Enter a name with at least 2 characters.');
   const id = newId();
@@ -69,7 +109,7 @@ app.post('/api/auth/guest', wrap((req) => {
   return { token: issue(id), user: publicUser({ id, name, guest: 1 }) };
 }));
 
-app.post('/api/auth/register', wrap((req) => {
+app.post('/api/auth/register', SEC.rateLimit('register', 10, 3600000), wrap((req) => {
   const username = String(req.body.username || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const name = cleanName(req.body.name) || username;
@@ -86,14 +126,31 @@ app.post('/api/auth/register', wrap((req) => {
   return { token: issue(id), user: publicUser({ id, username, name, guest: 0 }) };
 }));
 
-app.post('/api/auth/login', wrap((req) => {
-  const u = get('SELECT * FROM users WHERE username = ?', String(req.body.username || '').trim().toLowerCase());
+app.post('/api/auth/login', SEC.rateLimit('login', 30, 15 * 60000, 'Too many sign-in attempts. Try again in a few minutes.'), wrap((req) => {
+  const username = String(req.body.username || '').trim().toLowerCase();
+  // Repeated wrong passwords for one account are slowed down too, whatever address they come from.
+  if (SEC.limited(`login-user:${username}`, 10, 15 * 60000)) throw new G.GameError('Too many sign-in attempts for this account. Try again in a few minutes.');
+  const u = get('SELECT * FROM users WHERE username = ?', username);
   if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) throw new G.GameError('Wrong username or password.');
+  if (u.status === 'suspended') throw new G.GameError('This account is suspended. Contact the organisers.');
   return { token: issue(u.id), user: publicUser(u) };
+}));
+// Change password (signs out other devices).
+app.post('/api/me/password', needUser, SEC.rateLimit('password', 10, 3600000), wrap((req) => {
+  const u = get('SELECT * FROM users WHERE id = ?', req.user.id);
+  if (u.is_guest) throw new G.GameError('Register first to set a password.');
+  if (!checkPass(String(req.body.current || ''), u.pass_hash)) throw new G.GameError('Your current password is wrong.');
+  const next = String(req.body.next || '');
+  if (next.length < 8) throw new G.GameError('Use a password of at least 8 characters.');
+  run('UPDATE users SET pass_hash = ? WHERE id = ?', hashPass(next), u.id);
+  run('DELETE FROM sessions WHERE user_id = ? AND token <> ?', u.id, req.token);
+  return { ok: true };
 }));
 
 app.post('/api/auth/logout', needUser, wrap((req) => { run('DELETE FROM sessions WHERE token = ?', req.token); return { ok: true }; }));
-app.get('/api/me', wrap((req) => ({ user: req.user ? { ...publicUser(req.user), admin: isAdmin(req.user) } : null })));
+app.get('/api/me', wrap((req) => ({ user: req.user ? { ...publicUser(req.user), admin: isAdmin(req.user), role: SEC.roleOf(req.user), permissions: SEC.permissionsOf(req.user) } : null })));
+// What players' devices need from the admin settings (formats, AI options, stadiums, commentary on/off).
+app.get('/api/config', wrap(() => CONFIG.publicConfig()));
 
 app.patch('/api/me', needUser, wrap((req) => {
   const b = req.body || {};
@@ -203,26 +260,100 @@ app.get('/api/users/:id/achievements', wrap((req) => {
   const { fresh, ...p } = CAREER.progress(req.params.id);
   return p;
 }));
-app.get('/api/admin/achievements', needAdmin, wrap(() => CAREER.listAll()));
-app.post('/api/admin/achievements', needAdmin, wrap((req) => { try { return { id: CAREER.saveAchievement(req.body || {}) }; } catch (e) { throw new G.GameError(e.message); } }));
-app.post('/api/admin/challenges', needAdmin, wrap((req) => { try { return { id: CAREER.saveChallenge(req.body || {}) }; } catch (e) { throw new G.GameError(e.message); } }));
+app.get('/api/admin/achievements', need('config.manage'), wrap(() => CAREER.listAll()));
+app.post('/api/admin/achievements', ...staff('config.manage', 'achievement.save', (req) => { try { const id = CAREER.saveAchievement(req.body || {}); return { id, _audit: ['achievement', id, req.body] }; } catch (e) { throw new G.GameError(e.message); } }));
+app.post('/api/admin/challenges', ...staff('config.manage', 'challenge.save', (req) => { try { const id = CAREER.saveChallenge(req.body || {}); return { id, _audit: ['challenge', id, req.body] }; } catch (e) { throw new G.GameError(e.message); } }));
 app.get('/api/leaderboard', wrap((req) => ({ sort: req.query.sort || 'points', rows: leaderboard(String(req.query.sort || 'points')) })));
 app.get('/healthz', (req, res) => res.json({ ok: true }));
 
 // ---------- real cricket teams (read: anyone; edit: admins) ----------
+// Validation messages go back to the person; programming errors are logged and reported generically.
+const isBug = (e) => e instanceof TypeError || e instanceof ReferenceError || e instanceof SyntaxError || e instanceof RangeError || !(e instanceof Error);
 const plain = (fn) => (req, res) => {
   Promise.resolve().then(() => fn(req, res)).then((out) => out !== undefined && res.json(out))
-    .catch((e) => res.status(e instanceof G.GameError || e instanceof Error ? 400 : 500).json({ error: e.message || 'Something went wrong.' }));
+    .catch((e) => { if (isBug(e)) { serverError(e, req); res.status(500).json({ error: 'Something went wrong on the server.' }); } else res.status(400).json({ error: e.message }); });
 };
 app.get('/api/cricket/teams', plain(() => ({ ...CDB.listTeams(), provider: SYNC.providerName() })));
 app.get('/api/cricket/teams/:id', plain((req) => { const t = CDB.getTeam(req.params.id); if (!t) throw new Error('Team not found.'); return t; }));
-app.get('/api/admin/sync', needAdmin, plain(() => ({ status: CDB.syncStatus(), runs: CDB.recentSyncRuns(), provider: SYNC.providerName() })));
-app.post('/api/admin/sync', needAdmin, plain(async () => ({ result: await SYNC.runSync('manual'), status: CDB.syncStatus() })));
-app.get('/api/admin/teams', needAdmin, plain(() => CDB.listTeams({ includeInactive: true })));
-app.post('/api/admin/teams', needAdmin, plain((req) => ({ id: CDB.adminSaveTeam(req.body || {}) })));
-app.post('/api/admin/teams/:id/players', needAdmin, plain((req) => ({ id: CDB.adminAddPlayer(req.params.id, req.body || {}) })));
-app.patch('/api/admin/players/:id', needAdmin, plain((req) => { CDB.adminUpdatePlayer(Number(req.params.id), req.body || {}); return { ok: true }; }));
-app.delete('/api/admin/teams/:id/players/:pid', needAdmin, plain((req) => { CDB.adminRemovePlayer(req.params.id, Number(req.params.pid)); return { ok: true }; }));
+app.get('/api/admin/sync', need('admin.view'), plain(() => ({ status: CDB.syncStatus(), runs: CDB.recentSyncRuns(), provider: SYNC.providerName() })));
+app.post('/api/admin/sync', need('cricket.manage'), plain(async (req) => { SEC.audit(req, 'sync.run'); return { result: await SYNC.runSync('manual'), status: CDB.syncStatus() }; }));
+app.get('/api/admin/teams', need('admin.view'), plain(() => CDB.listTeams({ includeInactive: true })));
+app.post('/api/admin/teams', need('cricket.manage'), plain((req) => { const id = CDB.adminSaveTeam(req.body || {}); SEC.audit(req, 'team.save', 'team', id, req.body); return { id }; }));
+app.post('/api/admin/teams/:id/players', need('cricket.manage'), plain((req) => { const id = CDB.adminAddPlayer(req.params.id, req.body || {}); SEC.audit(req, 'player.add', 'team', req.params.id, { playerId: id, ...req.body }); return { id }; }));
+app.patch('/api/admin/players/:id', need('cricket.manage'), plain((req) => { CDB.adminUpdatePlayer(Number(req.params.id), req.body || {}); SEC.audit(req, 'player.edit', 'player', req.params.id, req.body); return { ok: true }; }));
+app.delete('/api/admin/teams/:id/players/:pid', need('cricket.manage'), plain((req) => { CDB.adminRemovePlayer(req.params.id, Number(req.params.pid)); SEC.audit(req, 'player.remove', 'team', req.params.id, { playerId: Number(req.params.pid) }); return { ok: true }; }));
+app.get('/api/admin/cricket/seasons', need('admin.view'), plain(() => ({ seasons: CDB.seasons() })));
+app.get('/api/admin/cricket/teams/:id/squad', need('admin.view'), plain((req) => CDB.squadHistory(req.params.id, req.query.season ? String(req.query.season) : null)));
+app.get('/api/admin/cricket/players', need('admin.view'), plain((req) => ({ players: CDB.searchPlayers(req.query.q || '') })));
+app.get('/api/admin/cricket/duplicates', need('admin.view'), plain(() => ({ groups: CDB.duplicates() })));
+app.post('/api/admin/cricket/merge', need('cricket.manage'), plain((req) => { const r = CDB.mergePlayers(Number(req.body?.keep), Number(req.body?.duplicate)); SEC.audit(req, 'player.merge', 'player', req.body?.keep, { duplicate: req.body?.duplicate, ...r }); return r; }));
+// Import squads from a spreadsheet: preview first (?dryRun=1), then apply.
+app.post('/api/admin/cricket/import', need('cricket.manage'), express.raw({ type: 'application/octet-stream', limit: '5mb' }), plain(async (req) => {
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw new Error('Choose an .xlsx file.');
+  let parsed;
+  try { parsed = await IMPORTER.parseWorkbook(req.body); } catch { throw new Error("That file couldn't be read as an Excel workbook (.xlsx)."); }
+  const name = String(req.query.name || 'spreadsheet').slice(0, 80);
+  // Which existing team each one updates; any that match nothing would be added as new teams.
+  const match = (category, t) => CDB.matchTeam('import', category, { name: t.name, short: t.short, extId: `${category}:${t.name.toLowerCase().replace(/[^a-z0-9]/g, '')}` })?.name || null;
+  const preview = { compiled: parsed.compiled, international: parsed.international.map((t) => ({ name: t.name, players: t.players.length, squadFor: t.squadFor, announced: t.announced, sources: t.sources, updates: match('international', t) })),
+    ipl: parsed.ipl.map((t) => ({ name: t.name, short: t.short, players: t.players.length, updates: match('ipl', t) })), excluded: parsed.excluded, replacements: parsed.replacements, warnings: parsed.warnings };
+  if (req.query.dryRun) return { preview };
+  if (parsed.warnings.length) throw new Error(parsed.warnings.join(' '));
+  const result = IMPORTER.applyImport(parsed, { label: `Spreadsheet: ${name}` });
+  SEC.audit(req, 'cricket.import', 'file', name, { squads: result.squads, newPlayers: result.newPlayers, transfers: result.transfers, removed: result.removedPlayers });
+  return { preview, result, status: CDB.syncStatus() };
+}));
+
+// ---------- staff: overview, users, matches, configuration, logs, backups ----------
+const txt = (e) => { throw new G.GameError(e.message); };
+app.get('/api/admin/overview', need('admin.view'), wrap((req) => ({ ...ADMIN.overview(), sync: CDB.syncStatus(), integrity: INTEGRITY.lastIntegrity(), backups: SEC.can(req.user, 'system.manage') ? BACKUP.listBackups().slice(0, 1) : null, notifications: ADMIN.listNotifications(10), role: SEC.roleOf(req.user), permissions: SEC.permissionsOf(req.user) })));
+app.get('/api/admin/users', need('users.view'), wrap((req) => ADMIN.listUsers(req.query)));
+app.get('/api/admin/users/:id', need('users.view'), wrap((req) => ADMIN.userDetail(req.params.id)));
+app.patch('/api/admin/users/:id', ...staff('users.edit', 'user.rename', (req) => { const ch = ADMIN.renameUser(req.user, req.params.id, req.body || {}); return { ok: true, changes: ch, _audit: ['user', req.params.id, ch] }; }));
+app.post('/api/admin/users/:id/status', ...staff('users.suspend', 'user.status', (req) => {
+  const r = ADMIN.setStatus(req.user, req.params.id, req.body || {});
+  if (r.status === 'suspended') io.in(`u:${req.params.id}`).disconnectSockets(true);
+  return { ok: true, ...r, _audit: ['user', req.params.id, r] };
+}));
+app.post('/api/admin/users/:id/role', ...staff('users.role', 'user.role', (req) => { const r = ADMIN.setRole(req.user, req.params.id, String(req.body?.role || '')); return { ok: true, ...r, _audit: ['user', req.params.id, r] }; }));
+app.get('/api/admin/matches', need('matches.view'), wrap((req) => ADMIN.listMatches(req.query)));
+app.get('/api/admin/matches/:id', need('matches.view'), wrap((req) => ADMIN.inspectMatch(req.params.id)));
+app.post('/api/admin/matches/:id/abandon', need('matches.manage'), plain(async (req) => {
+  const id = req.params.id.toUpperCase();
+  const since = lastMsgId(id), ctx = G.newCtx();
+  G.adminAbandon(req.user.id, id, req.body?.reason, ctx);
+  SEC.audit(req, 'match.abandon', 'match', id, { reason: req.body?.reason });
+  await broadcast(id, since, ctx);
+  return { ok: true };
+}));
+app.post('/api/admin/matches/cleanup', need('matches.manage'), plain(async (req) => {
+  const days = Math.max(1, Math.min(365, Number(req.body?.days) || 14));
+  const ids = ADMIN.staleLobbies(days);
+  for (const id of ids) { const ctx = G.newCtx(); G.adminAbandon(req.user.id, id, `not started for ${days} days`, ctx); }
+  SEC.audit(req, 'match.cleanup', 'match', null, { days, count: ids.length });
+  return { abandoned: ids.length };
+}));
+app.get('/api/admin/config', need('config.manage'), wrap(() => ({ config: CONFIG.getConfig(), events: Object.fromEntries(Object.entries(CONFIG.COMMENTARY_EVENTS).map(([k, v]) => [k, v.label])), placeholders: CONFIG.PLACEHOLDERS })));
+app.put('/api/admin/config/:section', ...staff('config.manage', 'config.save', (req) => { let saved; try { saved = CONFIG.saveSection(req.params.section, req.body || {}); } catch (e) { txt(e); } return { section: req.params.section, saved, _audit: ['config', req.params.section, saved] }; }));
+app.get('/api/admin/audit', need('audit.view'), wrap((req) => ({ entries: SEC.recentAudit({ before: Number(req.query.before) || undefined }) })));
+app.get('/api/admin/errors', need('audit.view'), wrap(() => ({ errors: SEC.recentErrors() })));
+app.get('/api/admin/notifications', need('admin.view'), wrap(() => ({ notifications: ADMIN.listNotifications(100) })));
+app.post('/api/admin/notifications/read', need('admin.view'), wrap(() => { ADMIN.markNotificationsRead(); return { ok: true }; }));
+app.get('/api/admin/system', need('system.manage'), wrap(() => ({ backups: BACKUP.listBackups(), pendingRestore: BACKUP.pendingRestore(), integrity: INTEGRITY.lastIntegrity(), backupDir: BACKUP.backupDir() })));
+app.post('/api/admin/backups', ...staff('system.manage', 'backup.create', () => { let b; try { b = BACKUP.createBackup('manual'); } catch (e) { txt(e); } return { backup: b, _audit: ['backup', b.name] }; }));
+app.get('/api/admin/backups/:name', need('system.manage'), (req, res) => {
+  try { const p = BACKUP.backupPath(req.params.name); SEC.audit(req, 'backup.download', 'backup', req.params.name); res.download(p); }
+  catch (e) { res.status(404).json({ error: e.message }); }
+});
+app.post('/api/admin/backups/:name/restore', ...staff('system.manage', 'backup.restore_scheduled', (req) => { let v; try { v = BACKUP.requestRestore(req.params.name); } catch (e) { txt(e); } return { ok: true, counts: v.counts, _audit: ['backup', req.params.name, v.counts] }; }));
+app.delete('/api/admin/restore', ...staff('system.manage', 'backup.restore_cancelled', () => { BACKUP.cancelRestore(); return { ok: true }; }));
+// Apply a scheduled restore now: the server stops and the platform starts it again (the restore runs before the database opens).
+app.post('/api/admin/restart', ...staff('system.manage', 'server.restart', (req, res) => {
+  if (!BACKUP.pendingRestore()) throw new G.GameError('No restore is scheduled.');
+  res.on('finish', () => setTimeout(() => process.exit(1), 300));
+  return { ok: true };
+}));
+app.post('/api/admin/integrity', ...staff('system.manage', 'integrity.run', () => { const r = INTEGRITY.runIntegrity('manual'); return { ...r, _audit: ['integrity', null, { ok: r.ok, problems: r.problemCount }] }; }));
 
 // ---------- static client ----------
 const dist = path.resolve('client/dist');
@@ -234,7 +365,8 @@ if (fs.existsSync(dist)) {
 // ---------- realtime ----------
 io.use((socket, next) => {
   const u = userFromToken(socket.handshake.auth?.token);
-  if (!u) return next(new Error('unauthorized'));
+  if (!u || u.status === 'suspended') return next(new Error('unauthorized'));
+  u.guest = !!u.guest;
   socket.data.user = u;
   next();
 });
@@ -320,6 +452,7 @@ io.on('connection', (socket) => {
   const handle = (fn, light = false) => async (payload, ack = () => {}) => {
     const matchId = String(payload?.matchId || socket.data.matchId || '').toUpperCase();
     try {
+      if (SEC.limited(`sock:${user.id}`, 60, 10000)) throw new G.GameError('Slow down a little.');
       if (!matchId || !socket.rooms.has(roomOf(matchId))) throw new G.GameError('Open the match first.');
       const since = lastMsgId(matchId);
       const ctx = G.newCtx();
@@ -330,7 +463,7 @@ io.on('connection', (socket) => {
       } else await broadcast(matchId, since, ctx);
       ack({ ok: true, ...(extra || {}) });
     } catch (e) {
-      if (!(e instanceof G.GameError)) console.error(e);
+      if (!(e instanceof G.GameError)) SEC.logError('socket', e, { route: 'socket', userId: user.id });
       ack({ ok: false, error: e instanceof G.GameError ? e.message : 'Something went wrong on the server.' });
     }
   };
@@ -403,15 +536,32 @@ io.on('connection', (socket) => {
   });
 });
 
-// Daily cricket data sync; failures are shown to admins.
-SYNC.setAlertHandler((text) => {
-  for (const name of adminNames()) {
-    const u = get('SELECT id FROM users WHERE username = ?', name);
-    if (u) io.to(`u:${u.id}`).emit('notify', { title: 'Cricket data', body: text, kind: 'info' });
-  }
-  console.warn(text);
-});
-if (process.env.NODE_ENV !== 'test') SYNC.startSchedule();
+// Staff notifications: stored for the admin dashboard, and shown to staff who are online.
+function notifyStaff(kind, text) {
+  try {
+    ADMIN.addNotification(kind, text);
+    const staffIds = all(`SELECT id, username, role, is_guest FROM users WHERE is_guest = 0 AND (role IN ('admin', 'moderator') OR LOWER(username) IN (${SEC.ownerNames().map(() => '?').join(',') || "''"}))`, ...SEC.ownerNames());
+    for (const u of staffIds) io.to(`u:${u.id}`).emit('notify', { title: kind === 'sync' ? 'Cricket data' : kind === 'integrity' ? 'Data check' : kind === 'backup' ? 'Backups' : 'Server', body: text, kind: 'info' });
+  } catch (e) { console.error(e); }
+  console.warn(`[${kind}] ${text}`);
+}
+// Daily cricket data sync; failures are shown to staff.
+SYNC.setAlertHandler((text) => notifyStaff('sync', text));
+if (process.env.NODE_ENV !== 'test') {
+  SYNC.startSchedule();
+  BACKUP.startBackups((e) => notifyStaff('backup', `Automatic backup failed: ${e.message}`));
+  // Integrity check once a day; staff hear about any problem.
+  const integrityTick = () => {
+    const last = INTEGRITY.lastIntegrity();
+    if (last && Date.now() - last.at < 86400000) return;
+    try { const r = INTEGRITY.runIntegrity('schedule'); if (!r.ok) notifyStaff('integrity', `Daily data check found ${r.problemCount} problem(s). Open Admin, System to see them.`); }
+    catch (e) { SEC.logError('integrity', e); }
+  };
+  setTimeout(integrityTick, 60000).unref();
+  setInterval(integrityTick, 3600000).unref();
+}
+process.on('unhandledRejection', (e) => SEC.logError('unhandledRejection', e));
+process.on('uncaughtException', (e) => { SEC.logError('uncaughtException', e); process.exit(1); });
 
 const PORT = Number(process.env.PORT || 3000);
 server.listen(PORT, () => console.log(`FOOTY CRICKET LEAGUE on http://localhost:${PORT}`));

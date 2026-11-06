@@ -45,7 +45,7 @@ export async function runSync(trigger = 'manual') {
         }
       });
       changes.calls = p.calls;
-      delete changes._moved; delete changes._released;
+      delete changes._moved; delete changes._released; delete changes._seen; delete changes._seenExt;
       run('UPDATE sync_runs SET finished_at = ?, ok = 1, summary = ?, error = ? WHERE id = ?', Date.now(), JSON.stringify(changes), changes.skipped.join(' ') || null, id);
       if (changes.skipped.length) onAlert(`Cricket data sync finished with warnings: ${changes.skipped.join(' ')}`);
       return changes;

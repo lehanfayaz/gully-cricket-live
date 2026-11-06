@@ -43,9 +43,9 @@ export default function TeamPicker({ data, value, onChange, exclude, label }) {
 export function SyncNote({ data }) {
   const s = data.sync;
   return (
-    <p className="text-xs text-chalk-faint">
-      {s.lastSuccessAt ? `Teams and squads last updated ${fmt(s.lastSuccessAt)}${data.provider ? ` from ${data.provider}` : ''}.`
-        : `Squads haven't been synced yet${data.provider ? '' : ' (no data provider set up)'}. Team list as of ${fmt(s.seedAsOf) || 'setup'}; teams without a squad use numbered stand-in players.`}
+    <p className={`text-xs ${s.stale ? 'text-flood' : 'text-chalk-faint'}`}>
+      {s.lastSuccessAt ? `Squads as of ${fmt(s.lastSuccessAt)}${s.lastSource ? ` (${s.lastSource.replace(/^Spreadsheet: /, '')})` : ''}.${s.stale ? ` That's over ${s.staleDays} days ago, so some squads may be out of date.` : ''}`
+        : `Squads haven't been updated yet${data.provider ? '' : ' (no data source set up)'}. Team list as of ${fmt(s.seedAsOf) || 'setup'}; teams without a squad use numbered stand-in players.`}
     </p>
   );
 }

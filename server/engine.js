@@ -8,6 +8,7 @@ import { get, all, run, tx } from './db.js';
 import { checkDigits, isDotOver, isTest } from './rules.js';
 import { selectXI } from './aibrain.js';
 import { commentary as writeCommentary } from './commentary.js';
+import { getConfig } from './config.js';
 import { getTeam } from './cricketdb.js';
 
 export class GameError extends Error {}
@@ -70,6 +71,22 @@ export function sanitizeConfig(input = {}, base = DEFAULT_CONFIG) {
   if (input.spectators === 'open' || input.spectators === 'watch') c.spectators = input.spectators;
   for (const k of ['superOver', 'noConsecutive', 'untilWinner']) if (k in input) c[k] = !!input[k];
   return c;
+}
+
+// What admins have switched on (formats, limits, AI levels and personalities) applies to every new match.
+export function enforceAppConfig(cfg, input = {}) {
+  const c = getConfig();
+  const NAME = { test: 'Test', t20: 'T20', odi: 'ODI', custom: 'Custom-overs' };
+  if (!c.formats.enabled.includes(cfg.format)) fail(`${NAME[cfg.format]} matches aren't available right now.`);
+  if (cfg.format === 'custom' && cfg.overs > c.formats.maxCustomOvers) fail(`Custom matches can be at most ${c.formats.maxCustomOvers} overs.`);
+  if (cfg.format === 'test' && cfg.days > c.formats.maxTestDays) fail(`Test matches can be at most ${c.formats.maxTestDays} days.`);
+  if (cfg.participation === 'ai') {
+    if (input.aiLevel === undefined) cfg.aiLevel = c.ai.defaultLevel;
+    if (input.aiPersonality === undefined) cfg.aiPersonality = c.ai.defaultPersonality;
+    if (!c.ai.levels.includes(cfg.aiLevel)) fail(`The ${cfg.aiLevel} AI isn't available right now.`);
+    if (!c.ai.personalities.includes(cfg.aiPersonality)) fail(`The ${cfg.aiPersonality} AI personality isn't available right now.`);
+  }
+  return cfg;
 }
 
 // ---------- reads ----------
@@ -162,6 +179,7 @@ function newCode() {
 export function createMatch(userId, { name, teamA, teamB, config, copyFrom, realTeams, quick }) {
   const id = newCode();
   const cfg = sanitizeConfig(quick ? { ...config, participation: 'ai', quick: true } : config);
+  enforceAppConfig(cfg, config || {});
   // Real international/IPL teams are only for one-v-one matches.
   if (realTeams && cfg.participation === 'team') fail('Real cricket teams are only available in one-v-one matches.');
   if (cfg.teamSource === 'real') {
@@ -1018,14 +1036,19 @@ export function testAction(userId, matchId, a, ctx) {
         break;
       }
       case 'declare': {
+        // The batting captain can declare at any point of their innings: mid-session, between overs,
+        // during a session or day break, or while the match is suspended.
         if (!isTest(m.config)) fail('Declarations are only for Test matches.');
-        if (m.status !== 'live' || !inn || inn.status !== 'live') fail('No innings in progress.');
+        if (!['live', 'session_break', 'day_break', 'suspended'].includes(m.status) || !inn || inn.status !== 'live') fail('There is no innings in progress to declare.');
         if (!(captainOf(m, inn.batting) === userId || ump)) fail(`Only ${teamName(m, inn.batting)}'s captain${m.config.mode === 'umpire' ? ' or the umpire' : ''} can declare.`);
-        if (openSet(inn.id)) fail('Wait until the current submission is revealed, then declare.');
+        // Numbers locked in for the next ball(s) haven't been revealed: they're discarded unseen.
+        const pending = openSet(inn.id);
+        if (pending) run(`UPDATE sets SET status = 'cancelled', end_reason = 'declared' WHERE id = ?`, pending.id);
         run('UPDATE innings SET declared = 1 WHERE id = ?', inn.id);
-        record(matchId, userId, 'declare', `📣 ${teamName(m, inn.batting)} declare at ${totals(inn.id).runs}/${totals(inn.id).wickets}.`);
+        record(matchId, userId, 'declare', `📣 ${teamName(m, inn.batting)} declare at ${totals(inn.id).runs}/${totals(inn.id).wickets}${m.status === 'live' ? '' : ` (during the ${m.status === 'suspended' ? 'suspension' : 'break'})`}.${pending ? ' Numbers already locked in for the next ball were discarded unseen.' : ''}`);
         endTestInnings(m, inn, ctx, 'declared');
-        sessionCheck(m, ctx);
+        // A declaration in a break or suspension leaves the break as it is; play resumes with the next innings.
+        if (m.status === 'live') sessionCheck(m, ctx);
         break;
       }
       case 'follow_on': {
@@ -1090,6 +1113,22 @@ function finishMatch(m, result, ctx, status = 'completed') {
   ctx.fx.push({ type: 'result', text: result.text });
   for (const p of all('SELECT user_id FROM members WHERE match_id = ? AND banned = 0', m.id))
     ctx.notify.push({ userId: p.user_id, title: 'Match over', body: result.text, kind: 'info' });
+}
+
+// ---------- staff ----------
+// A moderator or admin abandons a match (e.g. one left running, or reported). It counts as no result;
+// nothing already played is changed.
+export function adminAbandon(staffId, matchId, reason, ctx) {
+  return tx(() => {
+    const m = loadMatch(matchId);
+    if (m.status === 'completed' || m.status === 'abandoned') fail('This match has already finished.');
+    const why = String(reason || '').trim().slice(0, 140);
+    if (why.length < 3) fail('Give a reason (it is shown to the players).');
+    const result = { winner: null, tie: false, abandoned: true, text: `Match abandoned by the organisers (${why}).` };
+    record(matchId, staffId, 'admin_abandon', result.text, { reason: why }, false);
+    finishMatch(m, result, ctx, 'abandoned');
+    run('UPDATE matches SET abandoned_reason = ? WHERE id = ?', why, matchId);
+  });
 }
 
 // ---------- players picking their own team (lobby only) ----------
@@ -1543,7 +1582,7 @@ export function publicState(matchId) {
     };
   }
   // Ball-by-ball commentary, written from the saved deliveries (see commentary.js).
-  const commentary = writeCommentary(m, { limit: 60, teamName });
+  const commentary = writeCommentary(m, { limit: 60, teamName }).map((c) => (getConfig().commentary.enabled ? c : { ...c, text: null }));
   const history = all('SELECT id, action, text, created_at FROM audit WHERE match_id = ? AND text IS NOT NULL ORDER BY id DESC LIMIT 60', matchId)
     .map((h) => ({ id: h.id, action: h.action, text: h.text, at: h.created_at }));
   // Where the match is in its lifecycle, for the status banner.

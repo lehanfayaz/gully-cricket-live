@@ -3,6 +3,7 @@
 // scorecard uses, so the commentary can't contradict it. Wording varies, but is fixed per ball (it's
 // chosen from the ball's id), so the same ball always reads the same way.
 import { all } from './db.js';
+import { getConfig, fillTemplate } from './config.js';
 
 const pick = (id, options) => options[Math.abs(Math.imul(id, 2654435761)) % options.length];
 const ballLabel = (n) => `${Math.floor((n - 1) / 6)}.${((n - 1) % 6) + 1}`;
@@ -50,18 +51,27 @@ export function commentary(m, { limit = 60, teamName }) {
       if (legal === 1) parts.push(inn.super_over ? `Super over: ${team} bat.` : inn.target ? `${team} begin the chase, needing ${inn.target} to win.` : `${team} begin their innings.`);
       if (test && b.session_idx && b.session_idx !== session && legal > 1) parts.push(`Day ${b.day}, session ${b.session_num} is underway.`);
       if (b.session_idx) session = b.session_idx;
-      // The delivery itself.
+      // The delivery itself. Admin templates (if any) replace the built-in wording; the kind of ball is
+      // always stated, and every number comes from the record.
       const id = b.id;
+      const tpl = getConfig().commentary.templates || {};
+      const vals = { batter: b.batter, bowler: b.bowler, bat: b.bat_num, bowl: b.bowl_num, runs: b.runs };
+      const ev = b.is_wicket ? (b.dismissal === 'dot_rule' ? null : 'wicket') : b.runs === 6 ? 'six' : b.runs === 4 ? 'four' : b.runs === 0 ? 'dot' : 'runs';
+      const mark = { wicket: ['OUT!', /\bout\b/i], six: ['SIX!', /\bsix\b/i], four: ['FOUR!', /\bfour\b/i] }[ev];
+      const custom = ev && tpl[ev]?.length ? fillTemplate(pick(id, tpl[ev]), vals) : null;
+      const fromTpl = custom && mark && !mark[1].test(custom) ? `${mark[0]} ${custom}` : custom;
       if (b.is_wicket && b.dismissal === 'dot_rule') parts.push(`OUT! ${b.batter} hasn't scored off the first two balls of the over and is out under the dot-over rule.`);
       else if (b.is_wicket) {
-        parts.push(pick(id, [`OUT! ${b.bowler} has found the matching number. Both picked ${b.bowl_num}.`, `OUT! ${b.bowler} reads it perfectly: ${b.bowl_num} against ${b.bowl_num}.`, `OUT! Matching numbers, ${b.bowl_num} and ${b.bowl_num}. ${b.batter} has to go.`]));
+        if (fromTpl) parts.push(fromTpl); else parts.push(pick(id, [`OUT! ${b.bowler} has found the matching number. Both picked ${b.bowl_num}.`, `OUT! ${b.bowler} reads it perfectly: ${b.bowl_num} against ${b.bowl_num}.`, `OUT! Matching numbers, ${b.bowl_num} and ${b.bowl_num}. ${b.batter} has to go.`]));
+        if (fromTpl && !/^OUT!/.test(parts.at(-1))) parts[parts.length - 1] = `OUT! ${parts.at(-1)}`;
         parts.push(`${b.batter} departs for ${k.runs} off ${plural(k.balls, 'ball')}.`);
         // Why this one mattered, judged from the record.
         const needLeft = inn.target ? inn.target - runs - adj(b.created_at) : null, ballsLeft = inn.max_balls - legal;
         if (prevKnock.runs >= 30) parts.push(`A crucial wicket: the set batter is gone.`);
         else if (inn.target && needLeft > 0 && ballsLeft > 0 && needLeft <= ballsLeft * 2.5 && ballsLeft <= 18) parts.push(`A crucial wicket at this stage of the chase.`);
         else if (wkts === inn.max_wickets - 1) parts.push(`${team} are down to their last wicket.`);
-      } else if (b.runs === 6) parts.push(pick(id, [`SIX! ${b.batter} picks 6 and ${b.bowler} went ${b.bowl_num}.`, `SIX! A brave 6 from ${b.batter}; ${b.bowler} had ${b.bowl_num}.`, `SIX! Maximum. ${b.bowler}'s ${b.bowl_num} was nowhere near it.`]));
+      } else if (fromTpl) parts.push(fromTpl);
+      else if (b.runs === 6) parts.push(pick(id, [`SIX! ${b.batter} picks 6 and ${b.bowler} went ${b.bowl_num}.`, `SIX! A brave 6 from ${b.batter}; ${b.bowler} had ${b.bowl_num}.`, `SIX! Maximum. ${b.bowler}'s ${b.bowl_num} was nowhere near it.`]));
       else if (b.runs === 4) parts.push(pick(id, [`FOUR! A clever selection. ${b.batter} scores 4 runs.`, `FOUR! ${b.batter} picks 4, ${b.bowler} had ${b.bowl_num}.`, `FOUR! Well chosen by ${b.batter}; ${b.bowler} went ${b.bowl_num}.`]));
       else if (b.runs === 0) parts.push(pick(id, [`Dot ball. ${b.batter} blocks with 0; ${b.bowler} had ${b.bowl_num}.`, `No run. ${b.batter} plays it safe with 0.`, `${b.batter} picks 0, a dot. ${b.bowler} had ${b.bowl_num}.`]));
       else parts.push(pick(id, [`${plural(b.runs, 'run')}. ${b.batter} picks ${b.bat_num}, ${b.bowler} ${b.bowl_num}.`, `${b.batter} takes ${b.runs}; ${b.bowler} had ${b.bowl_num}.`, `${b.bat_num} against ${b.bowl_num}: ${plural(b.runs, 'run')} to ${b.batter}.`]));

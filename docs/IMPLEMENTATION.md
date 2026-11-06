@@ -10,6 +10,12 @@ A reference for anyone changing the game. It describes the code as it is, where 
 | Rules engine | `server/engine.js` | Every match action: creation, lineups, toss, submissions, reveal, innings, sessions, suspension, results, chat. Clients only send intents. |
 | Digit rules | `server/rules.js` | Which numbers each role may pick per format, and the bowler repetition rule. Mirrored in `client/src/rules.js` only to grey out buttons. |
 | AI player | `server/ai.js` | Reads public state and revealed balls only, then acts through the same engine functions as a person |
+| Security | `server/security.js` | Roles and permissions, sessions, rate limits, security headers, audit and error logs |
+| Admin | `server/admin.js` | Users, matches, notifications, overview |
+| Configuration | `server/config.js` | Admin-managed AI options, formats, stadiums, commentary templates (validated, enforced on match creation) |
+| Backups | `server/backup.js`, `server/tools/` | Automatic verified backups, restore at start-up, command-line backup, restore and integrity tools |
+| Integrity | `server/integrity.js` | Database and per-match checks from first principles |
+| Squad import | `server/importer.js` | Spreadsheet import through the sync pipeline |
 | Career | `server/career.js` | Achievements and challenges as data-driven rules, levels, milestones |
 | Commentary | `server/commentary.js` | Ball-by-ball commentary written from the saved deliveries |
 | Tournaments | `server/tournament.js` | Fixtures, standings, net run rate, qualification, bracket, AI v AI play, tournament stats |
@@ -190,8 +196,29 @@ Each AI action is logged in `ai_decisions`. If the AI ever needed its fallback, 
 | `test/testmatch.test.js` | Test digits, sessions, suspend/resume, day changes, dot-over rule (no-umpire and umpire rulings), declarations, follow-on, innings win, draw |
 | `test/rules.test.js` | Every rule example from the specification, in both formats and both play styles, through the real engine, including repetition tracking across a mid-over session break and suspension |
 | `test/ai.test.js` | AI rule compliance (fuzzed), AI never seeing hidden picks, one-v-one and real-team matches, data sync, Quick Match |
+| `test/admin.test.js` | Declaring at any time; roles and permissions; suspension; sessions; passwords; rate limits; headers; configuration enforced; commentary templates; tamper guards; integrity checks catching tampering; match management; audit log; sync identity, duplicates and merging; backups and restore in a real process; spreadsheet import |
 | `test/career.test.js` | Achievements and challenges earned in real matches and a tournament, dated and linked to the match; admin rules applying without code changes; levels; profile picture and favourite teams |
 | `test/broadcast.test.js` | Every commentary line checked against the scorecard and replay (Test dot-over rule, umpire adjustments and voided overs, AI v AI in each format) |
 | `test/tournament.test.js` | Complete tournaments of every kind from first fixture to champion with no manual edits; tables recomputed independently; byes; repeated super overs; fairness; resuming in a new process |
 | `test/analytics.test.js` | Replay rebuilt into every scorecard (19 matches incl. Tests, real teams, voided overs and umpire adjustments); every career figure recounted directly from the balls table |
 | `test/aigrid.test.js` | Every difficulty × personality played as complete matches (Test, T20, ODI, Quick × complete over and ball by ball, 128 matches) and audited ball by ball; fairness; strength and personality differences; 8,000 fuzzed decisions |
+
+
+## Automated test coverage (Phase 7 checklist)
+
+`npm test` runs eleven suites. Where each required area is covered:
+
+| Area | Where |
+|---|---|
+| Digit restrictions (every format, both roles) | `rules.test.js`; every ball of every simulated match in `aigrid.test.js` and `tournament.test.js`; `integrity.js` checks |
+| Bowler repetition limits | `rules.test.js` (all patterns), AI fuzz in `ai.test.js` and `aigrid.test.js` |
+| Wicket-based repetition resets | `rules.test.js` (the 444663 example and others) |
+| Over progression and incomplete overs | `rules.test.js`, `match.test.js` (submission sized to balls left, innings ending mid-over), `analytics.test.js` (partial overs in the replay) |
+| Test sessions, suspension and resumption | `testmatch.test.js`, `admin.test.js` (declaring in breaks and suspensions) |
+| Consecutive dot-over scoring requirement | `testmatch.test.js`, `broadcast.test.js` |
+| AI submissions | `ai.test.js`, `aigrid.test.js` (128 complete matches, fairness, strength) |
+| Tournament progression | `tournament.test.js` (every format to a champion, resuming in a new process) |
+| Statistics | `analytics.test.js` (every figure recounted from the balls table) |
+| Replay consistency | `analytics.test.js` (replay rebuilt into the scorecard for every match) |
+| Achievements | `career.test.js` |
+| Security, admin and recovery | `admin.test.js` |

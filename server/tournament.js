@@ -8,6 +8,7 @@ import * as G from './engine.js';
 import { aiStep } from './ai.js';
 import { getTeam } from './cricketdb.js';
 import { matchAnalysis } from './analytics.js';
+import { getConfig } from './config.js';
 
 const fail = (msg) => { throw new G.GameError(msg); };
 const now = () => Date.now();
@@ -86,6 +87,14 @@ export function createTournament(ownerId, body = {}) {
   const humanIndex = Number.isInteger(body.humanIndex) && body.humanIndex >= 0 && body.humanIndex < list.length ? body.humanIndex : fail('Pick which team is yours.');
   const structure = normalize(kind, body.structure || {}, list.length);
   const settings = { ...matchSettings(body.match || {}), ...structure };
+  // Admin settings: formats, over limits, AI levels and personalities on offer.
+  const cfg = getConfig();
+  if (!cfg.formats.enabled.includes(settings.format)) fail(`${settings.format.toUpperCase()} matches aren't available right now.`);
+  if (settings.format === 'custom' && settings.overs > cfg.formats.maxCustomOvers) fail(`Custom matches can be at most ${cfg.formats.maxCustomOvers} overs.`);
+  if (!(body.match || {}).aiLevel) settings.aiLevel = cfg.ai.defaultLevel;
+  if (!cfg.ai.levels.includes(settings.aiLevel)) fail(`The ${settings.aiLevel} AI isn't available right now.`);
+  if (settings.aiPersonality !== 'mixed' && !cfg.ai.personalities.includes(settings.aiPersonality)) fail(`The ${settings.aiPersonality} AI personality isn't available right now.`);
+  settings.personalityPool = cfg.ai.personalities;
   // Teams, from the latest synced team database (real) or named by the player (custom).
   const seen = new Set();
   const teams = list.map((t, i) => {
@@ -108,7 +117,7 @@ export function createTournament(ownerId, body = {}) {
     t.group = GROUP_NAMES[r % 2 === 0 ? pos : settings.groups - 1 - pos];
   });
   let pi = 0;
-  for (const t of teams) t.personality = t.human ? null : settings.aiPersonality === 'mixed' ? PERSONALITIES[pi++ % 4] : settings.aiPersonality;
+  for (const t of teams) t.personality = t.human ? null : settings.aiPersonality === 'mixed' ? settings.personalityPool[pi++ % settings.personalityPool.length] : settings.aiPersonality;
 
   const id = crypto.randomBytes(5).toString('hex').toUpperCase();
   tx(() => {

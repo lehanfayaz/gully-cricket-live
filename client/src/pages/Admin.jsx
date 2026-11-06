@@ -7,7 +7,7 @@ import TeamBadge from '../components/TeamBadge.jsx';
 const when = (t) => (t ? new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : 'never');
 const ROLES = [['bat', 'Batter'], ['wk', 'Keeper'], ['ar', 'All-rounder'], ['bowl', 'Bowler']];
 
-export default function Admin() {
+export function CricketData() {
   const { user, toast } = useApp();
   const [sync, setSync] = useState(null);
   const [teams, setTeams] = useState(null);
@@ -18,7 +18,7 @@ export default function Admin() {
     api('/api/admin/teams').then(setTeams).catch(() => {});
   };
   useEffect(load, []); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!user?.admin) return <p className="p-8 text-center text-chalk-dim">This page is for admins. Admins are the registered usernames listed in the server's ADMIN_USERNAMES setting.</p>;
+  const canEdit = user?.permissions?.includes('cricket.manage');
   const runNow = async () => {
     setBusy(true);
     try { const r = await api('/api/admin/sync', { body: {} }); toast({ title: 'Sync finished', body: `${r.result.squads} squads, ${r.result.newPlayers} new players, ${r.result.transfers} transfers.` }); }
@@ -26,8 +26,7 @@ export default function Admin() {
     setBusy(false); load();
   };
   return (
-    <div className="space-y-4 px-4 pb-12 pt-2">
-      <h1 className="font-display text-5xl font-extrabold leading-none">Admin</h1>
+    <div className="space-y-4">
       <section className="panel space-y-2 p-4">
         <h2 className="font-display text-2xl font-bold">Sync</h2>
         {!sync ? <p className="text-chalk-dim">Loading…</p> : (
@@ -35,7 +34,7 @@ export default function Admin() {
             <p className="text-sm">{sync.provider ? <>Source: <b>{sync.provider}</b>. Runs daily; retries an hour after a failure.</> : <span className="text-flood">No data provider set. Add CRICKETDATA_API_KEY to the server's environment (free key at cricketdata.org).</span>}</p>
             <p className="text-sm">Last successful sync: <b>{when(sync.status.lastSuccessAt)}</b></p>
             {sync.status.lastError && <p className="rounded-lg bg-leather/20 p-2 text-sm text-leather">Last problem: {sync.status.lastError}</p>}
-            <button className="btn-go" disabled={busy || !sync.provider} onClick={runNow}>{busy ? 'Syncing…' : 'Sync now'}</button>
+            {canEdit && <button className="btn-go" disabled={busy || !sync.provider} onClick={runNow}>{busy ? "Syncing…" : "Sync now"}</button>}
             {sync.runs.length > 0 && (
               <table className="mt-2 w-full text-sm">
                 <thead className="text-left text-chalk-dim"><tr><th className="font-medium">Started</th><th className="font-medium">Trigger</th><th className="font-medium">Result</th></tr></thead>
@@ -52,11 +51,10 @@ export default function Admin() {
           </>
         )}
       </section>
-      <CareerRules />
       <section className="panel p-4">
         <div className="flex items-baseline justify-between">
           <h2 className="font-display text-2xl font-bold">Teams</h2>
-          <button className="btn-ghost py-1.5 text-base" onClick={() => setOpen('new')}>Add a team</button>
+          {canEdit && <button className="btn-ghost py-1.5 text-base" onClick={() => setOpen("new")}>Add a team</button>}
         </div>
         <p className="text-sm text-chalk-dim">Edits here are kept: the sync won't overwrite a team or player an admin has changed.</p>
         {open === 'new' && <TeamForm onDone={() => { setOpen(null); load(); }} />}
@@ -144,7 +142,7 @@ function TeamEditor({ id, onDone }) {
 }
 
 // Achievements and challenges are rules stored as data: add or change them here, no code changes needed.
-function CareerRules() {
+export function CareerRules() {
   const { toast } = useApp();
   const [d, setD] = useState(null);
   const [edit, setEdit] = useState(null); // { kind: 'achievement'|'challenge', item }

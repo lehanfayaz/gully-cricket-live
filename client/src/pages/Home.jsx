@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
+import { useAppConfig } from '../appConfig.js';
 import { SignInCard, useApp } from '../App.jsx';
 import TeamBadge from '../components/TeamBadge.jsx';
 import TeamPicker, { SyncNote } from '../components/TeamPicker.jsx';
@@ -102,12 +103,15 @@ const AI_PERSONALITY_NOTE = {
 };
 // Difficulty and personality are set independently.
 function AIPicker({ level, personality, setLevel, setPersonality }) {
+  const cfg = useAppConfig();
+  // Only what the organisers have switched on; fall back to their default if the current pick is off.
+  useEffect(() => { if (!cfg.ai.levels.includes(level)) setLevel(cfg.ai.defaultLevel); if (!cfg.ai.personalities.includes(personality)) setPersonality(cfg.ai.defaultPersonality); }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="space-y-3">
       <div>
         <span className="label">AI difficulty</span>
         <div className="grid grid-cols-4 gap-2">
-          {['easy', 'medium', 'hard', 'expert'].map((l) => (
+          {cfg.ai.levels.map((l) => (
             <button key={l} type="button" aria-pressed={level === l} onClick={() => setLevel(l)}
               className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${level === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
           ))}
@@ -117,7 +121,7 @@ function AIPicker({ level, personality, setLevel, setPersonality }) {
       <div>
         <span className="label">AI personality</span>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {['strategic', 'aggressive', 'defensive', 'unpredictable'].map((p) => (
+          {cfg.ai.personalities.map((p) => (
             <button key={p} type="button" aria-pressed={personality === p} onClick={() => setPersonality(p)}
               className={`rounded-lg py-2 text-sm font-semibold capitalize ${personality === p ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{p}</button>
           ))}
@@ -139,6 +143,9 @@ function CreateMatch() {
   });
   const [past, setPast] = useState([]);
   const [teams, setTeams] = useState(null);
+  const cfg = useAppConfig();
+  // Start on a format the organisers have switched on.
+  useEffect(() => { if (!cfg.formats.enabled.includes(f.format)) setF((x) => ({ ...x, format: cfg.formats.enabled[0], overs: cfg.formats.enabled[0] === 't20' ? 20 : cfg.formats.enabled[0] === 'odi' ? 50 : Math.min(x.overs, cfg.formats.maxCustomOvers) })); }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { api('/api/cricket/teams').then(setTeams).catch(() => setTeams({ categories: [], teams: [], sync: {} })); }, []);
   const oneVOne = f.participation !== 'team';
   const real = oneVOne && f.teamSource === 'real';
@@ -221,16 +228,16 @@ function CreateMatch() {
           <div>
             <span className="label">Format</span>
             <div className="grid grid-cols-2 gap-2">
-              <Choice selected={f.format === 't20'} onClick={() => setF((x) => ({ ...x, format: 't20', overs: 20, wickets: x.format === 'test' ? 3 : x.wickets }))} title="T20" body="20 overs a side." />
-              <Choice selected={f.format === 'odi'} onClick={() => setF((x) => ({ ...x, format: 'odi', overs: 50, wickets: x.format === 'test' ? 3 : x.wickets }))} title="ODI" body="50 overs a side." />
-              <Choice selected={f.format === 'custom'} onClick={() => setF((x) => ({ ...x, format: 'custom', overs: x.format === 't20' || x.format === 'odi' ? 2 : x.overs, wickets: x.format === 'test' ? 3 : x.wickets }))} title="Custom overs" body="Pick the overs yourself." />
-              <Choice selected={f.format === 'test'} onClick={() => setF((x) => ({ ...x, format: 'test', wickets: 10 }))} title="Test match" body="Days and sessions, two innings each." />
+              {cfg.formats.enabled.includes('t20') && <Choice selected={f.format === 't20'} onClick={() => setF((x) => ({ ...x, format: 't20', overs: 20, wickets: x.format === 'test' ? 3 : x.wickets }))} title="T20" body="20 overs a side." />}
+              {cfg.formats.enabled.includes('odi') && <Choice selected={f.format === 'odi'} onClick={() => setF((x) => ({ ...x, format: 'odi', overs: 50, wickets: x.format === 'test' ? 3 : x.wickets }))} title="ODI" body="50 overs a side." />}
+              {cfg.formats.enabled.includes('custom') && <Choice selected={f.format === 'custom'} onClick={() => setF((x) => ({ ...x, format: 'custom', overs: x.format === 't20' || x.format === 'odi' ? 2 : x.overs, wickets: x.format === 'test' ? 3 : x.wickets }))} title="Custom overs" body="Pick the overs yourself." />}
+              {cfg.formats.enabled.includes('test') && <Choice selected={f.format === 'test'} onClick={() => setF((x) => ({ ...x, format: 'test', wickets: 10 }))} title="Test match" body="Days and sessions, two innings each." />}
             </div>
           </div>
           {f.format !== 'test' ? (
             <>
               <div className="grid grid-cols-3 gap-3">
-                {f.format === 'custom' ? <Stepper label="Overs" value={f.overs} set={set('overs')} min={1} max={50} /> : <div><span className="label">Overs</span><div className="py-2 text-center font-display text-3xl font-bold">{f.overs}</div></div>}
+                {f.format === 'custom' ? <Stepper label="Overs" value={f.overs} set={set('overs')} min={1} max={cfg.formats.maxCustomOvers} /> : <div><span className="label">Overs</span><div className="py-2 text-center font-display text-3xl font-bold">{f.overs}</div></div>}
                 <Stepper label="Wickets" value={f.wickets} set={set('wickets')} min={1} max={20} />
                 {real ? <Stepper label="Playing XI" value={f.xiSize} set={set('xiSize')} min={2} max={11} /> : oneVOne ? <div><span className="label">Per side</span><div className="py-2 text-center font-display text-3xl font-bold">1</div></div> : <Stepper label="Per side" value={f.playersPerTeam} set={set('playersPerTeam')} min={1} max={15} />}
               </div>
@@ -246,7 +253,7 @@ function CreateMatch() {
           ) : (
             <>
               <div className="grid grid-cols-3 gap-3">
-                <Stepper label="Days" value={f.days} set={set('days')} min={1} max={5} />
+                <Stepper label="Days" value={f.days} set={set('days')} min={1} max={cfg.formats.maxTestDays} />
                 <Stepper label="Sessions a day" value={f.sessionsPerDay} set={set('sessionsPerDay')} min={1} max={4} />
                 <Stepper label="Overs a session" value={f.oversPerSession} set={set('oversPerSession')} min={1} max={90} />
               </div>
@@ -359,6 +366,7 @@ const QUICK = [
 // Quick Match: you against the AI in a couple of taps. Same engine, same history, same rules.
 function QuickMatch() {
   const nav = useNavigate();
+  const cfg = useAppConfig();
   const [teams, setTeams] = useState(null);
   const [pick, setPick] = useState(null);
   const [f, setF] = useState({ real: true, mine: 'int-ind', theirs: 'int-aus', myName: 'My XI', level: 'medium', personality: 'strategic', overs: 3, days: 1, oversPerSession: 10, play: 'over', start: 'toss' });
@@ -387,17 +395,17 @@ function QuickMatch() {
       <h2 className="font-display text-2xl font-bold">Quick match</h2>
       <p className="text-sm text-chalk-dim">You against the AI. Pick a length and play.</p>
       <div className="mt-3 grid grid-cols-4 gap-2">
-        {QUICK.map((q) => (
+        {QUICK.filter((q) => cfg.formats.enabled.includes(q.format || 'custom') && (q.format || q.overs <= cfg.formats.maxCustomOvers)).map((q) => (
           <button key={q.id} type="button" aria-pressed={pick === q.id} onClick={() => setPick(pick === q.id ? null : q.id)}
             className={`rounded-xl px-1 py-3 font-display text-base font-bold leading-tight ring-2 ${pick === q.id ? 'bg-flood text-pitch-900 ring-flood' : 'bg-pitch-900/60 ring-pitch-600 hover:ring-pitch-500'}`}>{q.title}</button>
         ))}
       </div>
       {preset && (
         <div className="mt-4 space-y-3">
-          {preset.id === 'custom' && <Stepper label="Overs" value={Number(f.overs)} set={set('overs')} min={1} max={50} />}
+          {preset.id === 'custom' && <Stepper label="Overs" value={Number(f.overs)} set={set('overs')} min={1} max={cfg.formats.maxCustomOvers} />}
           {preset.format === 'test' && (
             <div className="grid grid-cols-2 gap-3">
-              <Stepper label="Days" value={Number(f.days)} set={set('days')} min={1} max={5} />
+              <Stepper label="Days" value={Number(f.days)} set={set('days')} min={1} max={cfg.formats.maxTestDays} />
               <Stepper label="Overs a session" value={Number(f.oversPerSession)} set={set('oversPerSession')} min={1} max={30} />
             </div>
           )}

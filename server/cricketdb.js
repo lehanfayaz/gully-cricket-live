@@ -71,7 +71,15 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   summary TEXT                              -- JSON: counts of new/renamed teams, new players, transfers, removals
 );
 CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT);
+-- Every id a player has had at any source points at the same person, so a provider changing its id
+-- (or a second source) never creates a duplicate.
+CREATE TABLE IF NOT EXISTS cricket_player_ext (
+  source TEXT NOT NULL, ext_id TEXT NOT NULL, player_id INTEGER NOT NULL REFERENCES cricket_players(id),
+  PRIMARY KEY (source, ext_id)
+);
 `);
+try { db.exec('ALTER TABLE cricket_players ADD COLUMN merged_into INTEGER'); } catch {}
+run('INSERT OR IGNORE INTO cricket_player_ext (source, ext_id, player_id) SELECT source, ext_id, id FROM cricket_players');
 
 const now = () => Date.now();
 export const getSetting = (k) => get('SELECT value FROM app_settings WHERE key = ?', k)?.value ?? null;
@@ -124,13 +132,17 @@ export function getTeam(id) {
   const t = get('SELECT * FROM cricket_teams WHERE id = ?', id);
   return t ? { ...teamView(t), squad: squadOf(id) } : null;
 }
+export const STALE_DAYS = Number(process.env.SQUADS_STALE_DAYS || 14);
 export function syncStatus() {
   const last = get('SELECT * FROM sync_runs ORDER BY id DESC LIMIT 1');
   const ok = get('SELECT * FROM sync_runs WHERE ok = 1 ORDER BY id DESC LIMIT 1');
+  const asOf = ok?.finished_at || null;
   return {
-    lastSuccessAt: ok?.finished_at || null, lastAttemptAt: last?.started_at || null,
+    lastSuccessAt: asOf, lastAttemptAt: last?.started_at || null, lastSource: ok?.provider || null,
     lastError: last && !last.ok && last.finished_at ? last.error : null, running: !!(last && !last.finished_at),
     seedAsOf: getSetting('seed_as_of'),
+    // Squads not refreshed recently are shown with their date, never as current.
+    stale: !asOf || Date.now() - asOf > STALE_DAYS * 86400000, staleDays: STALE_DAYS,
   };
 }
 
@@ -175,14 +187,40 @@ export function upsertSeason(category, season) {
   if (!cur?.season_id || !cur.year || (season.year && season.year >= cur.year)) run('UPDATE cricket_categories SET season_id = ? WHERE id = ?', season.id, category);
 }
 
+// The same person, whatever id they arrive with: first any id we've seen for them, then (once) a unique
+// name match in the same country, linked so later syncs find them directly.
+// A provider re-numbering a player is recognised because the old record isn't also in this same sync;
+// two different ids both in one sync stay two people.
+function findPlayer(source, p, seen = new Set()) {
+  const ext = get('SELECT player_id FROM cricket_player_ext WHERE source = ? AND ext_id = ?', source, String(p.extId));
+  if (ext) return { player: canonical(ext.player_id), how: 'id' };
+  const candidates = all('SELECT * FROM cricket_players WHERE merged_into IS NULL').filter((x) => norm(x.name) === norm(p.name)
+    && (!p.country || !x.country || norm(p.country) === norm(x.country)) && !seen.has(x.id));
+  if (candidates.length === 1) return { player: candidates[0], how: 'name' };
+  return { player: null, how: candidates.length > 1 ? 'ambiguous' : 'new' };
+}
+const canonical = (id) => { let p = get('SELECT * FROM cricket_players WHERE id = ?', id); for (let i = 0; p?.merged_into && i < 10; i++) p = get('SELECT * FROM cricket_players WHERE id = ?', p.merged_into); return p; };
+
 export function upsertPlayer(source, p, changes) {
-  const existing = get('SELECT * FROM cricket_players WHERE source = ? AND ext_id = ?', source, String(p.extId));
+  const seen = (changes._seen ||= new Set());
+  const found = findPlayer(source, p, seen);
+  const existing = found.player;
+  if (existing && found.how === 'id' && seen.has(existing.id) && changes._seenExt?.get(existing.id) !== String(p.extId)) (changes.possibleDuplicates ||= []).push(p.name);
   if (!existing) {
     const r = run(`INSERT INTO cricket_players (source, ext_id, name, role, batting_style, bowling_style, country, image_url, updated_at)
       VALUES (?,?,?,?,?,?,?,?,?)`, source, String(p.extId), p.name, p.role || null, p.batting || null, p.bowling || null, p.country || null, p.image || null, now());
+    const id = Number(r.lastInsertRowid);
+    run('INSERT OR IGNORE INTO cricket_player_ext (source, ext_id, player_id) VALUES (?,?,?)', source, String(p.extId), id);
+    seen.add(id); (changes._seenExt ||= new Map()).set(id, String(p.extId));
     changes.newPlayers += 1;
-    return Number(r.lastInsertRowid);
+    if (found.how === 'ambiguous') (changes.possibleDuplicates ||= []).push(p.name);
+    return id;
   }
+  if (found.how === 'name') {
+    run('INSERT OR IGNORE INTO cricket_player_ext (source, ext_id, player_id) VALUES (?,?,?)', source, String(p.extId), existing.id);
+    changes.linkedPlayers = (changes.linkedPlayers || 0) + 1;
+  }
+  seen.add(existing.id); (changes._seenExt ||= new Map()).set(existing.id, String(p.extId));
   if (!existing.locked) {
     run(`UPDATE cricket_players SET name = ?, role = COALESCE(?, role), batting_style = COALESCE(?, batting_style), bowling_style = COALESCE(?, bowling_style),
          country = COALESCE(?, country), image_url = COALESCE(?, image_url), updated_at = ? WHERE id = ?`,
@@ -197,8 +235,8 @@ export function setSquad(teamId, seasonId, playerIds, source, changes, category)
   const incoming = new Set(playerIds);
   for (const pid of incoming) {
     if (current.has(pid)) continue;
-    // An admin took this player out of the squad: respect that until an admin adds them back.
-    if (get(`SELECT 1 FROM cricket_squads WHERE team_id = ? AND season_id = ? AND player_id = ? AND active = 0 AND source = 'manual'`, teamId, seasonId, pid)) continue;
+    // An admin took this player out of the squad: respect that until an admin adds them back (an admin import may).
+    if (source !== 'import' && get(`SELECT 1 FROM cricket_squads WHERE team_id = ? AND season_id = ? AND player_id = ? AND active = 0 AND source = 'manual'`, teamId, seasonId, pid)) continue;
     // Same season, different team before? That's a transfer, not a new person.
     const prev = get(`SELECT s.team_id FROM cricket_squads s JOIN cricket_teams t ON t.id = s.team_id
       WHERE s.player_id = ? AND s.season_id = ? AND s.active = 1 AND s.team_id <> ? AND t.category = ?`, pid, seasonId, teamId, category);
@@ -217,8 +255,9 @@ export function setSquad(teamId, seasonId, playerIds, source, changes, category)
   }
   for (const pid of current) {
     if (incoming.has(pid)) continue;
-    const manual = get('SELECT source FROM cricket_squads WHERE team_id = ? AND season_id = ? AND player_id = ?', teamId, seasonId, pid)?.source === 'manual';
-    if (manual) continue; // admin additions stay until an admin removes them
+    const by = get('SELECT source FROM cricket_squads WHERE team_id = ? AND season_id = ? AND player_id = ?', teamId, seasonId, pid)?.source;
+    // Admin additions and admin imports stay until an admin changes them; an import replaces an earlier import.
+    if (by === 'manual' || (by === 'import' && source !== 'import')) continue;
     run('UPDATE cricket_squads SET active = 0, removed_at = ? WHERE team_id = ? AND season_id = ? AND player_id = ?', now(), teamId, seasonId, pid);
     if (changes._moved?.has(pid)) continue;
     changes.removedPlayers += 1;
@@ -271,3 +310,59 @@ export function adminRemovePlayer(teamId, playerId) {
 }
 export const recentSyncRuns = (n = 15) => all('SELECT * FROM sync_runs ORDER BY id DESC LIMIT ?', n)
   .map((r) => ({ id: r.id, provider: r.provider, trigger: r.trigger, startedAt: r.started_at, finishedAt: r.finished_at, ok: r.ok == null ? null : !!r.ok, error: r.error, summary: r.summary ? JSON.parse(r.summary) : null }));
+
+// ---------- admin views and corrections ----------
+export function seasons() {
+  return all('SELECT s.*, (s.id = c.season_id) AS current FROM cricket_seasons s JOIN cricket_categories c ON c.id = s.category ORDER BY s.category, s.year DESC, s.id')
+    .map((x) => ({ id: x.id, category: x.category, name: x.name, year: x.year, source: x.source, current: !!x.current, updatedAt: x.updated_at,
+      teams: get('SELECT COUNT(DISTINCT team_id) AS n FROM cricket_squads WHERE season_id = ? AND active = 1', x.id).n,
+      players: get('SELECT COUNT(*) AS n FROM cricket_squads WHERE season_id = ? AND active = 1', x.id).n }));
+}
+// A team's squad in any season, including players who have left (kept for history).
+export function squadHistory(teamId, seasonId) {
+  const t = get('SELECT * FROM cricket_teams WHERE id = ?', teamId);
+  if (!t) throw new Error('Team not found.');
+  const season = seasonId || currentSeason(t.category);
+  return { team: teamView(t), season, seasons: all('SELECT DISTINCT s.id, s.name FROM cricket_squads q JOIN cricket_seasons s ON s.id = q.season_id WHERE q.team_id = ? ORDER BY s.year DESC', teamId),
+    players: all(`SELECT p.id, p.name, p.role, p.country, p.image_url AS image, p.locked, p.source, q.active, q.source AS added_by, q.added_at, q.removed_at
+      FROM cricket_squads q JOIN cricket_players p ON p.id = q.player_id WHERE q.team_id = ? AND q.season_id = ? ORDER BY q.active DESC, p.name`, teamId, season)
+      .map((r) => ({ ...r, active: !!r.active, locked: !!r.locked })) };
+}
+export function searchPlayers(q, limit = 50) {
+  const like = `%${String(q || '').trim()}%`;
+  return all(`SELECT p.*, (SELECT GROUP_CONCAT(t.name, ', ') FROM cricket_squads s JOIN cricket_teams t ON t.id = s.team_id
+      JOIN cricket_categories c ON c.id = t.category AND c.season_id = s.season_id WHERE s.player_id = p.id AND s.active = 1) AS teams
+    FROM cricket_players p WHERE p.merged_into IS NULL AND p.name LIKE ? ORDER BY p.name LIMIT ?`, like, limit)
+    .map((p) => ({ id: p.id, name: p.name, role: p.role, country: p.country, image: p.image_url, source: p.source, locked: !!p.locked, teams: p.teams || '',
+      ids: all('SELECT source, ext_id FROM cricket_player_ext WHERE player_id = ?', p.id) }));
+}
+// Possible duplicates: two current records with the same name (and no conflicting country).
+export function duplicates() {
+  const groups = new Map();
+  for (const p of all('SELECT * FROM cricket_players WHERE merged_into IS NULL')) {
+    const k = norm(p.name);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(p);
+  }
+  return [...groups.values()].filter((g) => g.length > 1 && new Set(g.map((p) => norm(p.country || '')).filter(Boolean)).size <= 1)
+    .map((g) => g.map((p) => ({ id: p.id, name: p.name, country: p.country, role: p.role, source: p.source,
+      teams: all(`SELECT DISTINCT t.name FROM cricket_squads s JOIN cricket_teams t ON t.id = s.team_id WHERE s.player_id = ? AND s.active = 1`, p.id).map((x) => x.name) })));
+}
+// Merge a duplicate into the record to keep: squads, ids and past matches all point at the kept one.
+// The duplicate stays (marked merged) so nothing that referred to it breaks.
+export function mergePlayers(keepId, dupId) {
+  if (keepId === dupId) throw new Error('Pick two different players.');
+  const keep = get('SELECT * FROM cricket_players WHERE id = ? AND merged_into IS NULL', keepId), dup = get('SELECT * FROM cricket_players WHERE id = ? AND merged_into IS NULL', dupId);
+  if (!keep || !dup) throw new Error('Player not found.');
+  tx(() => {
+    for (const s of all('SELECT * FROM cricket_squads WHERE player_id = ?', dupId)) {
+      run(`INSERT INTO cricket_squads (team_id, season_id, player_id, active, source, added_at, removed_at) VALUES (?,?,?,?,?,?,?)
+           ON CONFLICT(team_id, season_id, player_id) DO UPDATE SET active = MAX(active, excluded.active)`, s.team_id, s.season_id, keepId, s.active, s.source, s.added_at, s.removed_at);
+      run('UPDATE cricket_squads SET active = 0, removed_at = COALESCE(removed_at, ?) WHERE team_id = ? AND season_id = ? AND player_id = ?', now(), s.team_id, s.season_id, dupId);
+    }
+    run('UPDATE cricket_player_ext SET player_id = ? WHERE player_id = ?', keepId, dupId);
+    run('UPDATE users SET player_id = ? WHERE player_id = ?', keepId, dupId);
+    run('UPDATE cricket_players SET merged_into = ?, updated_at = ? WHERE id = ?', keepId, now(), dupId);
+  });
+  return { kept: keep.name, merged: dup.name };
+}

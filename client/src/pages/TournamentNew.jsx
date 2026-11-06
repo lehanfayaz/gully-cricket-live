@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
+import { useAppConfig } from '../appConfig.js';
 import { useApp, SignInCard } from '../App.jsx';
 import TeamBadge from '../components/TeamBadge.jsx';
 import { SyncNote } from '../components/TeamPicker.jsx';
@@ -217,16 +218,22 @@ function StructureStep({ f, set, pv }) {
 }
 
 function MatchStep({ f, set }) {
+  const cfg = useAppConfig();
+  useEffect(() => {
+    if (!cfg.formats.enabled.includes(f.format)) set('format')(['t20', 'odi', 'custom'].find((k) => cfg.formats.enabled.includes(k)) || f.format);
+    if (!cfg.ai.levels.includes(f.aiLevel)) set('aiLevel')(cfg.ai.defaultLevel);
+    if (f.aiPersonality !== 'mixed' && !cfg.ai.personalities.includes(f.aiPersonality)) set('aiPersonality')('mixed');
+  }, [cfg]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="space-y-4">
       <div>
         <span className="label">Match format</span>
         <div className="grid grid-cols-3 gap-2">
-          {[['t20', 'T20', '20 overs'], ['odi', 'ODI', '50 overs'], ['custom', 'Custom', 'Pick the overs']].map(([k, t, b]) => <Choice key={k} selected={f.format === k} onClick={() => set('format')(k)} title={t} body={b} />)}
+          {[['t20', 'T20', '20 overs'], ['odi', 'ODI', '50 overs'], ['custom', 'Custom', 'Pick the overs']].filter(([k]) => cfg.formats.enabled.includes(k)).map(([k, t, b]) => <Choice key={k} selected={f.format === k} onClick={() => set('format')(k)} title={t} body={b} />)}
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        {f.format === 'custom' && <Stepper label="Overs per match" value={+f.overs} set={set('overs')} min={1} max={50} />}
+        {f.format === 'custom' && <Stepper label="Overs per match" value={+f.overs} set={set('overs')} min={1} max={cfg.formats.maxCustomOvers} />}
         <Stepper label="Wickets" value={+f.wickets} set={set('wickets')} min={1} max={10} />
       </div>
       <div>
@@ -239,7 +246,7 @@ function MatchStep({ f, set }) {
       <div>
         <span className="label">AI difficulty</span>
         <div className="grid grid-cols-4 gap-2">
-          {['easy', 'medium', 'hard', 'expert'].map((l) => (
+          {cfg.ai.levels.map((l) => (
             <button key={l} type="button" aria-pressed={f.aiLevel === l} onClick={() => set('aiLevel')(l)}
               className={`rounded-lg py-2 font-display text-lg font-bold capitalize ${f.aiLevel === l ? 'bg-flood text-pitch-900' : 'bg-pitch-600'}`}>{l}</button>
           ))}
@@ -248,7 +255,7 @@ function MatchStep({ f, set }) {
       <div>
         <span className="label">AI personalities</span>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-          {['mixed', 'strategic', 'aggressive', 'defensive', 'unpredictable'].map((p) => (
+          {['mixed', ...cfg.ai.personalities].map((p) => (
             <button key={p} type="button" aria-pressed={f.aiPersonality === p} onClick={() => set('aiPersonality')(p)}
               className={`rounded-lg py-2 text-sm font-semibold capitalize ${f.aiPersonality === p ? 'bg-turf text-pitch-900' : 'bg-pitch-600'}`}>{p}</button>
           ))}

@@ -131,8 +131,12 @@ export function TestDashboard({ state, priv, me }) {
       )}
 
       <div className="flex flex-wrap gap-2">
-        {live && inn && capOf.includes(inn.batting) && !state.current?.open && (
-          <button className="btn-ghost py-2 text-base" onClick={() => act({ type: 'declare' }, 'Declared')}>Declare</button>
+        {['live', 'session_break', 'day_break', 'suspended'].includes(state.status) && inn && inn.status !== 'done' && (capOf.includes(inn.batting) || (admin && state.mode === 'umpire')) && (
+          <button className="btn-ghost py-2 text-base" onClick={() => {
+            const sc = `${inn.runs}/${inn.wickets}`;
+            const pending = state.current?.open ? ' Numbers already locked in for the next ball are discarded unseen.' : '';
+            if (window.confirm(`Declare ${state.teams[inn.batting].name}'s innings at ${sc}?${pending}`)) act({ type: 'declare' }, 'Declared');
+          }}>Declare at {inn.runs}/{inn.wickets}</button>
         )}
         {live && capOf.length > 0 && !admin && !t.breakRequest && (
           <button className="btn-ghost py-2 text-base" onClick={() => act({ type: 'request_break' }, 'Break requested')}>Ask for a session break</button>

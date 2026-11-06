@@ -70,7 +70,7 @@ export default function Profile() {
             <div className="flex-1"><label className="label" htmlFor="rn">Display name</label><input id="rn" className="field" value={name} onChange={(e) => setName(e.target.value)} maxLength={24} /></div>
             <button className="btn-ghost">Save name</button>
           </form>
-          {user.guest && <Upgrade />}
+          {user.guest ? <Upgrade /> : <ChangePassword />}
         </section>
       )}
       <p className="text-xs text-chalk-faint">Every figure is counted from the deliveries of completed matches. Super overs are left out of career figures. Real-team matches count for the person playing them.</p>
@@ -313,5 +313,22 @@ function ProfileEdit({ p, id, onChange }) {
           <select id="fp" className="field" value={p.user.favIpl?.id || ''} onChange={(e) => fav('favIpl', e.target.value)}><option value="">None</option>{opts('ipl').map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
       </div>
     </div>
+  );
+}
+
+function ChangePassword() {
+  const { toast } = useApp();
+  const [f, setF] = useState({ current: '', next: '' });
+  const save = async (e) => {
+    e.preventDefault();
+    try { await api('/api/me/password', { body: f }); setF({ current: '', next: '' }); toast({ title: 'Password changed', body: 'Other devices have been signed out.' }); }
+    catch (x) { toast({ title: 'Password not changed', body: x.message }); }
+  };
+  return (
+    <form onSubmit={save} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+      <div><label className="label" htmlFor="pw0">Current password</label><input id="pw0" type="password" autoComplete="current-password" className="field" value={f.current} onChange={(e) => setF({ ...f, current: e.target.value })} /></div>
+      <div><label className="label" htmlFor="pw1">New password (8+ characters)</label><input id="pw1" type="password" autoComplete="new-password" minLength={8} className="field" value={f.next} onChange={(e) => setF({ ...f, next: e.target.value })} /></div>
+      <button className="btn-ghost" disabled={!f.current || f.next.length < 8}>Change password</button>
+    </form>
   );
 }

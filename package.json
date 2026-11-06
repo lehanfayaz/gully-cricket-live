@@ -10,10 +10,14 @@
     "dev:server": "node --disable-warning=ExperimentalWarning --watch server/index.js",
     "dev:client": "vite client",
     "build": "vite build client",
+    "backup": "node --disable-warning=ExperimentalWarning server/tools/backup.js",
+    "restore": "node --disable-warning=ExperimentalWarning server/tools/restore.js",
+    "integrity": "node --disable-warning=ExperimentalWarning server/tools/integrity.js",
     "start": "node --disable-warning=ExperimentalWarning server/index.js",
-    "test": "node --disable-warning=ExperimentalWarning test/rules.test.js && node --disable-warning=ExperimentalWarning test/match.test.js && node --disable-warning=ExperimentalWarning test/testmatch.test.js && node --disable-warning=ExperimentalWarning test/ai.test.js && node --disable-warning=ExperimentalWarning test/aigrid.test.js && node --disable-warning=ExperimentalWarning test/analytics.test.js && node --disable-warning=ExperimentalWarning test/tournament.test.js && node --disable-warning=ExperimentalWarning test/career.test.js && node --disable-warning=ExperimentalWarning test/broadcast.test.js"
+    "test": "node --disable-warning=ExperimentalWarning test/rules.test.js && node --disable-warning=ExperimentalWarning test/match.test.js && node --disable-warning=ExperimentalWarning test/testmatch.test.js && node --disable-warning=ExperimentalWarning test/ai.test.js && node --disable-warning=ExperimentalWarning test/aigrid.test.js && node --disable-warning=ExperimentalWarning test/analytics.test.js && node --disable-warning=ExperimentalWarning test/tournament.test.js && node --disable-warning=ExperimentalWarning test/career.test.js && node --disable-warning=ExperimentalWarning test/broadcast.test.js && node --disable-warning=ExperimentalWarning test/admin.test.js"
   },
   "dependencies": {
+    "exceljs": "^4.4.0",
     "express": "^5.3.0",
     "socket.io": "^4.8.4"
   },

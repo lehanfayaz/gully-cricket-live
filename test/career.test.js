@@ -124,7 +124,7 @@ assert.ok(CAREER.evaluate({ type: 'streak', target: 3, where: { won: true } }, [
 
 // Admins add a new achievement without any code change; it applies to past matches straight away.
 const boss = await api('/api/auth/register', { username: 'boss', password: 'password123', name: 'Boss' });
-await assert.rejects(api('/api/admin/achievements', { id: 'x', title: 'X', rule: { type: 'sum', field: 'sixes', target: 20 } }, token), /Only admins/);
+await assert.rejects(api('/api/admin/achievements', { id: 'x', title: 'X', rule: { type: 'sum', field: 'sixes', target: 20 } }, token), /permission/);
 await assert.rejects(api('/api/admin/achievements', { id: 'bad', title: 'Bad', rule: { type: 'sum', field: 'nonsense', target: 20 } }, boss.token), /Pick a field/);
 await assert.rejects(api('/api/admin/achievements', { id: 'bad2', title: 'Bad', rule: { type: 'count', target: 1, where: { secret: true } } }, boss.token), /Unknown condition/);
 await api('/api/admin/achievements', { id: 'twenty-sixes', title: 'Twenty Sixes', description: 'Hit 20 sixes', icon: '6️⃣', xp: 40, rule: { type: 'sum', field: 'sixes', target: 20 } }, boss.token);

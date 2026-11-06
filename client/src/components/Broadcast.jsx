@@ -5,7 +5,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { animationsOn, setSettings, useSettings } from '../settings.js';
 import { applyVolumes, sfx, unlock } from '../sound.js';
 import TeamBadge from './TeamBadge.jsx';
+import { useAppConfig } from '../appConfig.js';
 
+// The stadium to show: the player's choice if the organisers still offer it, otherwise their default.
+// Organiser-made themes (ids starting x-) are drawn like the custom stadium, in their colours.
+export function useStadium() {
+  const s = useSettings(), cfg = useAppConfig();
+  const pick = cfg.themes.enabled.includes(s.stadium) ? s.stadium : cfg.themes.default;
+  const made = cfg.themes.custom.find((t) => t.id === pick);
+  return made ? { t: 'custom', colors: made } : { t: pick, colors: s.custom };
+}
 export const STADIUMS = [
   ['day', 'Day', 'Blue skies and a sunlit outfield'],
   ['night', 'Night', 'Under the floodlights'],
@@ -16,10 +25,11 @@ export const STADIUMS = [
 
 // The stadium behind the match: sky, stands and lights, drawn with gradients. Sits behind everything.
 export function Stadium({ teams }) {
-  const s = useSettings();
-  const motion = animationsOn(s);
+  const s0 = useSettings();
+  const motion = animationsOn(s0);
+  const { t, colors } = useStadium();
+  const s = { ...s0, custom: colors };
   const a = teams?.A?.color || '#1C4E9C', b = teams?.B?.color || '#C8102E';
-  const t = s.stadium;
   const sky = { day: 'linear-gradient(180deg,#5FA8E8 0%,#9CCBF0 34%,#2F7A4E 34.5%,#0E281D 70%)',
     night: 'radial-gradient(ellipse at 15% 6%,rgba(255,250,220,.35),transparent 22%),radial-gradient(ellipse at 85% 6%,rgba(255,250,220,.35),transparent 22%),linear-gradient(180deg,#050B1A 0%,#0B1630 30%,#14402B 30.5%,#061510 72%)',
     international: `linear-gradient(180deg,#24364F 0%,#3B5574 28%,#1F5A3A 28.5%,#0A1F17 72%)`,
@@ -44,9 +54,10 @@ export function Stadium({ teams }) {
 
 // The wide shot: a band showing the ground (sky, stands, lights, boards and the pitch) above the play panel.
 export function StadiumBand({ teams, names }) {
-  const s = useSettings();
-  const motion = animationsOn(s);
-  const t = s.stadium;
+  const s0 = useSettings();
+  const motion = animationsOn(s0);
+  const { t, colors } = useStadium();
+  const s = { ...s0, custom: colors };
   const a = teams?.A?.color || '#1C4E9C', b = teams?.B?.color || '#C8102E';
   const sky = { day: 'linear-gradient(180deg,#4F9BE0,#A9D3F3)', night: 'linear-gradient(180deg,#030814,#0D1A38)', international: 'linear-gradient(180deg,#1E3350,#41618A)', ipl: 'linear-gradient(180deg,#12051F,#3A1060)', custom: `linear-gradient(180deg,${s.custom.sky},${s.custom.sky})` }[t];
   const stands = t === 'international' ? [a, b] : t === 'custom' ? [s.custom.stands, s.custom.accent] : t === 'ipl' ? ['#B03CFF', '#FFD23F'] : t === 'day' ? ['#D7E1EC', '#9DB3C9'] : ['#1D2A44', '#2B3E63'];
@@ -74,6 +85,9 @@ export function StadiumBand({ teams, names }) {
 
 export function PresentationSettings({ onClose }) {
   const s = useSettings();
+  const cfg = useAppConfig();
+  const choices = [...STADIUMS.filter(([k]) => cfg.themes.enabled.includes(k)), ...cfg.themes.custom.filter((x) => cfg.themes.enabled.includes(x.id)).map((x) => [x.id, x.name, 'A stadium from the organisers'])];
+  const current = cfg.themes.enabled.includes(s.stadium) ? s.stadium : cfg.themes.default;
   const vol = (k, label) => (
     <label className="flex items-center gap-3 text-sm">
       <span className="w-24 shrink-0">{label}</span>
@@ -89,14 +103,14 @@ export function PresentationSettings({ onClose }) {
       <div>
         <span className="label">Stadium</span>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {STADIUMS.map(([k, l, d]) => (
-            <button key={k} type="button" aria-pressed={s.stadium === k} onClick={() => setSettings({ stadium: k })}
-              className={`rounded-xl p-2.5 text-left ring-2 ${s.stadium === k ? 'bg-turf/15 ring-turf' : 'bg-pitch-900/60 ring-pitch-600 hover:ring-pitch-500'}`}>
+          {choices.map(([k, l, d]) => (
+            <button key={k} type="button" aria-pressed={current === k} onClick={() => setSettings({ stadium: k })}
+              className={`rounded-xl p-2.5 text-left ring-2 ${current === k ? 'bg-turf/15 ring-turf' : 'bg-pitch-900/60 ring-pitch-600 hover:ring-pitch-500'}`}>
               <span className="block font-semibold">{l}</span><span className="block text-xs text-chalk-dim">{d}</span>
             </button>
           ))}
         </div>
-        {s.stadium === 'custom' && (
+        {current === 'custom' && (
           <div className="mt-2 flex flex-wrap gap-4 text-sm">
             {[['sky', 'Sky'], ['stands', 'Stands'], ['accent', 'Second colour']].map(([k, l]) => (
               <label key={k} className="flex items-center gap-2">{l}<input type="color" value={s.custom[k]} onChange={(e) => setSettings({ custom: { [k]: e.target.value } })} className="h-8 w-10 rounded bg-transparent" /></label>

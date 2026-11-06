@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 
 const KEY = 'fcl_presentation';
 export const DEFAULTS = {
-  stadium: 'night',                 // day | night | international | ipl | custom
+  stadium: null,                    // null = the organisers' default; day | night | international | ipl | custom | x-… (organiser themes)
   custom: { sky: '#1B2A4A', stands: '#7A4FD6', accent: '#FFD23F' },
   animations: true,
   commentary: true,

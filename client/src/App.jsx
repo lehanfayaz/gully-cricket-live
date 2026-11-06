@@ -5,7 +5,7 @@ import Home from './pages/Home.jsx';
 import Match from './pages/Match.jsx';
 import Profile from './pages/Profile.jsx';
 import Leaderboard from './pages/Leaderboard.jsx';
-import Admin from './pages/Admin.jsx';
+import AdminPage from './pages/AdminPage.jsx';
 import MatchStats from './pages/MatchStats.jsx';
 import Tournament from './pages/Tournament.jsx';
 import TournamentNew from './pages/TournamentNew.jsx';
@@ -60,7 +60,7 @@ export default function App() {
             <Route path="/settings" element={<div className="px-4 pb-12 pt-2"><section className="panel mx-auto max-w-xl p-5"><PresentationSettings /></section></div>} />
             <Route path="/u/:id" element={<Profile />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
-            <Route path="/admin" element={<Admin />} />
+            <Route path="/admin" element={<AdminPage />} />
             <Route path="*" element={<div className="p-8 text-center text-chalk-dim">That page does not exist. <Link className="text-flood underline" to="/">Go home</Link></div>} />
           </Routes>
         </Shell>
